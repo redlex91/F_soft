@@ -13,10 +13,111 @@ MODULE constants
 USE prec_def
 IMPLICIT NONE
 SAVE
-INTEGER, PARAMETER :: NOS = 400, MAX_ITER = 10 ! NOS = number of spheres, MAX_ITER = maximum number of iterations of the program
+INTEGER, PARAMETER :: NOS = 9, MAX_ITER = 10 ! NOS = number of spheres, MAX_ITER = maximum number of iterations of the program
 REAL( long ), PARAMETER :: rho = 0.3, deltat = 0.001, r_c = 2.5, r_L = 2.8, F_c = -0.039, u_c = -0.0163 ! density, time interval, core distance, effective core distance, force and potential energy at r_c
 REAL(long), PARAMETER :: PI = 3.14159265358979323846264338327950288419716939937510_long, ETA_M = PI/4
 END MODULE constants
+
+MODULE global
+
+  ! Purpose: this module contains all the global variables and the general-aim functions and procedures.
+
+  USE prec_def
+  USE constants
+
+  IMPLICIT NONE
+  SAVE
+  REAL( long ) :: side, step ! side of the cube and initial separation of the particles
+  INTEGER :: n ! cube root of NOS rounded to the nearest integer
+
+CONTAINS
+
+  FUNCTION distance( x1, y1, z1, x2, y2, z2 )
+
+  ! Purpose: it takes as arguments the coordinates of two particles and returns the distance between them,
+  !          accounting for the boundary conditions
+
+  IMPLICIT NONE
+  REAL( long ), INTENT( in ) :: x1, x2, y1, y2, z1, z2
+  REAL( long ) :: distance
+  ! local var
+  REAL( long ) :: a1, a2, b1, b2, c1, c2
+  a1 = x1; a2 = x2; b1 = y1; b2 = y2; c1 = z1; c2 = z2
+
+  IF( ABS( a1-a2 ) > 0.5*side ) a2 = a2 - SIGN( 1._long, a2 - a1 )*side
+  IF( ABS( b1-b2 ) > 0.5*side ) b2 = b2 - SIGN( 1._long, b2 - b1 )*side
+  IF( ABS( c1-c2 ) > 0.5*side ) c2 = c2 - SIGN( 1._long, c2 - c1 )*side
+
+  distance = sqrt( (a2 - a1 )**2 + ( b2 - b1 )**2 + ( c2 - c1 )**2 )
+  RETURN
+  
+END FUNCTION distance
+
+FUNCTION comp( q1, q2 )
+  
+  ! Purpose: this function computes the difference between the same components of a vector
+  
+  IMPLICIT NONE
+  REAL( long ), INTENT( in ) :: q1, q2
+  REAL( long ) :: comp
+  ! local var
+  REAL( long ) :: a1, a2, b1, b2, c1, c2
+  a1 = q1; a2 = q2
+
+  IF( ABS( a1-a2 ) > 0.5*side ) a2 = a2 - SIGN( 1.0_long, a2 - a1 )*side
+  comp = a2 - a1
+  RETURN
+
+END FUNCTION comp
+
+FUNCTION find_next( current, array )
+
+  ! Purpose: it looks for the next non-NULL pointer in the npoint array from
+  !          the current position and returns its position; if no such pointer
+  !          can be found it returns NOS
+
+  USE prec_def
+  USE constants
+  USE dynamic_list
+  
+  IMPLICIT NONE
+  TYPE( ptr2node ), DIMENSION( 1: NOS ), INTENT( in ) :: array
+  INTEGER, INTENT( in ) :: current
+  INTEGER :: find_next
+  INTEGER :: k
+
+  find_next = NOS
+  DO k = current + 1, NOS
+     IF( ASSOCIATED( array( k )%Ptr ) ) THEN
+        find_next = k
+        EXIT
+     ENDIF
+  ENDDO
+  RETURN
+
+ENDFUNCTION find_next
+
+FUNCTION force( x1, x2, r )
+
+  ! Purpose: this function returns the value of the force along one component
+
+  USE prec_def
+  USE constants
+  
+  IMPLICIT NONE
+  REAL( long ), INTENT( in ) :: x1, x2, r
+  REAL( long ) :: force
+
+  IF( r <= r_c ) THEN
+     force = 24. * ( 2.*(1./r)**(13.) - (1./r)**(7.) )* comp( x1, x2 ) / r
+  ELSE
+     force = 0
+  ENDIF
+  RETURN
+  
+ENDFUNCTION force
+
+ENDMODULE global
 
 MODULE init
 
@@ -25,10 +126,8 @@ MODULE init
 
   USE prec_def
   USE constants
-  IMPLICIT NONE
-  REAL( long ) :: side, step
-  INTEGER :: n
-  
+  USE global
+ 
 CONTAINS
   
 SUBROUTINE init_cond( x, y, z, vx, vy, vz )
@@ -44,10 +143,6 @@ integer, dimension( : ), allocatable:: seed
 integer, dimension( 1:8 ) :: dt_seed
 integer :: n_seed
 
-
-n = nint( NOS**(1.0/3.0) )
-side = ( NOS / rho )**(1.0/3.0) 
-step = side / n
 
 ! assigning positions
 do i = 1, NOS
@@ -104,43 +199,6 @@ end do
 K = ( dot_product( x, x ) + dot_product( y, y ) + dot_product( z, z ) ) / ( 2.0 * NOS )
 
 END SUBROUTINE init_cond
-
-
-FUNCTION distance( x1, y1, z1, x2, y2, z2 )
-
-  ! Purpose: it takes as arguments the coordinates of two particles and returns the distance between them,
-  !          accounting for the boundary conditions
-
-  IMPLICIT NONE
-  REAL( long ), INTENT( in ) :: x1, x2, y1, y2, z1, z2
-  REAL( long ) :: distance
-  ! local var
-  REAL( long ) :: a1, a2, b1, b2, c1, c2
-  a1 = x1; a2 = x2; b1 = y1; b2 = y2; c1 = z1; c2 = z2
-
-  IF( ABS( a1-a2 ) > 0.5*side ) a2 = a2 - SIGN( 1._long, a2 - a1 )*side
-  IF( ABS( b1-b2 ) > 0.5*side ) b2 = b2 - SIGN( 1._long, b2 - b1 )*side
-  IF( ABS( c1-c2 ) > 0.5*side ) c2 = c2 - SIGN( 1._long, c2 - c1 )*side
-
-  distance = sqrt( (a2 - a1 )**2 + ( b2 - b1 )**2 + ( c2 - c1 )**2 )
-  RETURN
-  
-END FUNCTION distance
-
-FUNCTION comp( q1, q2 )
-  ! purpose:
-  
-IMPLICIT NONE
-real( long ), intent( in ) :: q1, q2
-real( long ) :: comp
-! local var
-real( long ) :: a1, a2, b1, b2, c1, c2
-a1 = q1; a2 = q2
-
-if( abs( a1-a2 ) > 0.5 ) a2 = a2 - sign( 1.0_long, a2 - a1 )
-comp = a2 - a1
-
-END FUNCTION comp
 
 SUBROUTINE rescale_temp( d_temp, v_mean, vx, vy, vz )
   ! Purpose: this subroutine rescales the velocities, given a desired value of the temperature
@@ -269,24 +327,35 @@ USE prec_def
 USE constants
 USE init
 USE dynamic_list
+USE global
 
 ! VARIABLE DECLARATION
 IMPLICIT NONE
 REAL( long ) :: v_mean, r, time
-REAL( long ), dimension( 1:NOS ) :: rx, ry, rz, vx, vy, vz, fx, fy, fz 
+REAL( long ), dimension( 1:NOS ) :: rx, ry, rz, vx, vy, vz, fx, fy, fz, ax, ay, az 
 
 INTEGER :: i, j, iter
 INTEGER :: flag = 0
 
 TYPE( ptr2node ) :: listH, listT  ! these variables contain the pointers to the head and the tail of the "list", see notes
 TYPE( ptr2node ), DIMENSION( 1:NOS ) :: npoint ! same as in the notes but instead of containing the position inside the list it points to the first occurence
-
+TYPE( ptr2node ) :: tmp ! this pointer is needed to skim the list
 
 ! vol = NOS / rho ! the volume is fixed by the densisty
 
-NULLIFY( listH%Ptr, listT%Ptr ) ! list is empty
-FORALL( i = 1:NOS )npoint( i )%Ptr => NULL() ! all pointers in the array are nullified
-time = 0 ! the time of the simulation is set to zero at the begininng
+! computing some quantities neeeded throughout the program
+! these variables MUST NOT be touched elsewhere
+n = nint( NOS**(1.0/3.0) )
+side = ( NOS / rho )**(1.0/3.0) 
+step = side / n
+
+! initialisation of pointer variables: all pointers are nullified for safety reasons
+NULLIFY( listH%Ptr, listT%Ptr, tmp%Ptr ) ! list is empty
+FORALL( i = 1:NOS ) npoint( i )%Ptr => NULL() ! all pointers in the array are nullified
+
+! time is set to zero before the start of the program
+time = 0
+
 
 ! STEP 1: INITIALISATION
 
@@ -323,6 +392,8 @@ ENDDO
 
 ! STEP 2: TERMALISATION
 ! the list should be destroyed after 10 time steps of simulation
+
+
 build_list: DO i = 1, NOS
    flag = 0
    DO j = i+1,  NOS
@@ -336,6 +407,73 @@ build_list: DO i = 1, NOS
    ENDDO
    IF( flag == 0 ) NULLIFY( npoint( i )%Ptr ) ! in this case no particle j>i is at distance < r_L
 ENDDO build_list
+
+! compute the force at time: time
+
+FORALL( i = 1 : NOS )
+   fx( i ) = -F_c
+   fy( i ) = -F_c
+   fz( i ) = -F_c
+   ax( i ) = 0
+   ay( i ) = 0
+   az( i ) = 0
+ENDFORALL
+
+tmp%Ptr => listH%Ptr  ! the temporary pointer is set at the beginning of the list
+
+
+skim_array: DO i = 1, NOS
+   
+   IF( ASSOCIATED( npoint( i )%Ptr ) ) THEN ! in this case the i-th particle is interacting with another one
+      ! skim the list untill next non-NULL npoint( j )%Ptr
+      ! the last particle's interactions are accounted for in the previous elements of the list so that npoint( NOS )%Ptr => NULL() always
+      skim_list: DO
+         IF( (.NOT.ASSOCIATED(tmp%Ptr)) .OR. ASSOCIATED( tmp%Ptr, npoint( find_next( i, npoint ) )%Ptr ) )   EXIT
+         ! it means that we have reached the next group of interacting particles, and the loop must be ended; if no next element can be found then the loop is eneded when tmp%Ptr reaches NULL()
+         j = tmp%Ptr%data ! set the index of the second particle
+         ! PRINT *, j
+         r = distance( rx( i ), ry( i ), rx( i ), rx( j ), ry( j ), rz( j ) )
+         fx( i ) = fx( i ) + force( rx( i ), rx( j ), r )
+         fy( i ) = fy( i ) + force( ry( i ), ry( j ), r )
+         fz( i ) = fz( i ) + force( rz( i ), rz( j ), r )
+         ! we must also account for the tmp%Ptr%data particle which experiments an equal but opposite force
+         fx( j ) = fx( j ) + force( rx( j ), rx( i ), r )
+         fy( j ) = fy( j ) + force( ry( j ), ry( i ), r )
+         fz( j ) = fz( j ) + force( rz( j ), rz( i ), r )
+         ! go to the next element in the list
+         tmp%Ptr => tmp%Ptr%nxtPtr
+      ENDDO skim_list
+   ENDIF
+   ! otherwise jump to the next particle
+ENDDO skim_array
+
+! compute the acceleration at time: time
+FORALL( i = 1 : NOS )
+   ax( i ) = -fx( i )
+   ay( i ) = -fy( i )
+   az( i ) = -fz( i )
+ENDFORALL
+
+! VELOCITY-VERLET ALGORYTHM:
+! 1. positions at time: time + delta_t
+FORALL( i = 1 : NOS )
+   rx( i ) = rx( i ) + vx( i )*deltat + (1./2.)*ax( i )*deltat**2
+   ry( i ) = ry( i ) + vy( i )*deltat + (1./2.)*ay( i )*deltat**2
+   rz( i ) = rz( i ) + vz( i )*deltat + (1./2.)*az( i )*deltat**2
+ENDFORALL
+
+! 2. velocities at atime: time + delta_t/2
+FORALL( i = 1 : NOS )
+   vx( i ) = vx( i ) + (1./2.)*ax( i )*deltat
+   vy( i ) = vy( i ) + (1./2.)*ay( i )*deltat
+   vz( i ) = vz( i ) + (1./2.)*az( i )*deltat
+ENDFORALL
+
+! 3. acceleration at time: time + delta_t
+! 4. velocities at time: time + delta_t
+! End of Velocity-Verlet algorythm
+
+
 
 ! CALL print_list( listH%Ptr, listT%Ptr )
 
