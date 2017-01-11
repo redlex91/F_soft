@@ -1,23 +1,167 @@
-! modules
+! Declaration of modules
 MODULE prec_def
-  ! purpose: this module defines the precision on REAL type
+  ! Purpose: this module defines the precision on REAL type
 IMPLICIT NONE
 SAVE
 INTEGER, PARAMETER :: long = selected_real_kind( 18,307 )
 ENDMODULE prec_def
 
 MODULE constants
-  ! purpose: declare all the constants used in the program,
+  ! Purpose: declare all the constants used in the program,
   !          so that they are available to both the main
   !          and all the subroutines
 USE prec_def
 IMPLICIT NONE
 SAVE
-INTEGER, PARAMETER :: NOS = 1000, MAX_ITER = 10 ! NOS = number of spheres, MAX_ITER = maximum number of iterations of the program
-REAL( long ), PARAMETER :: rho = 0.7, deltat = 0.001, r_c = 2.5, r_L = 2.8, F_c = -0.039, u_c = -0.0163 ! density, time interval, core distance, effective core distance, force and potential energy at r_c
+INTEGER, PARAMETER :: NOS = 400, MAX_ITER = 10 ! NOS = number of spheres, MAX_ITER = maximum number of iterations of the program
+REAL( long ), PARAMETER :: rho = 0.3, deltat = 0.001, r_c = 2.5, r_L = 2.8, F_c = -0.039, u_c = -0.0163 ! density, time interval, core distance, effective core distance, force and potential energy at r_c
 REAL(long), PARAMETER :: PI = 3.14159265358979323846264338327950288419716939937510_long, ETA_M = PI/4
-endmodule constants
+END MODULE constants
 
+MODULE init
+
+  ! Purpose: it contains all the subroutines dedicated to the initialisation of
+  ! the system
+
+  USE prec_def
+  USE constants
+  IMPLICIT NONE
+  REAL( long ) :: side, step
+  INTEGER :: n
+  
+CONTAINS
+  
+SUBROUTINE init_cond( x, y, z, vx, vy, vz )
+  ! Purpose: this subroutine initialises the system, assigning positions on a regular lattice and random velocities 
+
+IMPLICIT NONE
+real( long ), dimension( 1: NOS ), intent( out ) :: x, y, z, vx, vy, vz
+integer :: i
+
+! variables for generating random values
+real( long ) :: randnum, K, vxc, vyc, vzc ! K = kinetic energy per particle
+integer, dimension( : ), allocatable:: seed
+integer, dimension( 1:8 ) :: dt_seed
+integer :: n_seed
+
+
+n = nint( NOS**(1.0/3.0) )
+side = ( NOS / rho )**(1.0/3.0) 
+step = side / n
+
+! assigning positions
+do i = 1, NOS
+   x( i ) = step * ( 1/2.0 + mod( i - 1 , n ) )
+   y( i ) = step * ( 1/2.0 + mod( ( i - 1 ) / n , n ) )
+   z( i ) = step * ( 1/2.0 + ( i - 1 ) / (n*n) )
+enddo
+
+! setting seed for speen generator
+call random_seed( size = n_seed )
+allocate( seed( 1:n_seed ) )
+call random_seed( get = seed )
+call date_and_time( values = dt_seed )
+seed( n_seed ) = dt_seed( 8 ); seed( 1 ) = dt_seed( 8 ) * dt_seed( 7 ) * dt_seed( 6 )
+call random_seed( put = seed )
+deallocate( seed )
+! done setting seed
+
+! assigning random velocities
+do i= 1, NOS
+   call random_number( randnum )
+   vx( i ) = 2*randnum - 1
+end do
+do i= 1, NOS
+   call random_number( randnum )
+   vy( i ) = 2*randnum - 1
+end do
+do i= 1, NOS
+   call random_number( randnum )
+   vz( i ) = 2*randnum - 1
+end do
+
+! computing the cm velocitiy
+vxc = 0; vyc = 0; vzc = 0
+do i = 1, NOS
+   vxc = vxc + vx( i ) / NOS
+ vyc = vyc + vy( i ) / NOS
+ vzc = vzc + vz( i ) / NOS
+end do
+! subtracting the cm velocity
+do i = 1, NOS
+   vx( i ) = vx( i ) -vxc
+   vy( i ) = vy( i ) - vyc
+   vz( i ) = vz( i ) - vzc
+end do
+! verifying cm velocity = 0
+vxc = 0; vyc = 0; vzc = 0
+do i = 1, NOS
+   vxc = vxc + vx( i )
+   vyc = vyc + vy( i )
+   vzc = vzc + vz( i )
+end do
+
+K = ( dot_product( x, x ) + dot_product( y, y ) + dot_product( z, z ) ) / ( 2.0 * NOS )
+
+END SUBROUTINE init_cond
+
+
+FUNCTION distance( x1, y1, z1, x2, y2, z2 )
+
+  ! Purpose: it takes as arguments the coordinates of two particles and returns the distance between them,
+  !          accounting for the boundary conditions
+
+  IMPLICIT NONE
+  REAL( long ), INTENT( in ) :: x1, x2, y1, y2, z1, z2
+  REAL( long ) :: distance
+  ! local var
+  REAL( long ) :: a1, a2, b1, b2, c1, c2
+  a1 = x1; a2 = x2; b1 = y1; b2 = y2; c1 = z1; c2 = z2
+
+  IF( ABS( a1-a2 ) > 0.5*side ) a2 = a2 - SIGN( 1._long, a2 - a1 )*side
+  IF( ABS( b1-b2 ) > 0.5*side ) b2 = b2 - SIGN( 1._long, b2 - b1 )*side
+  IF( ABS( c1-c2 ) > 0.5*side ) c2 = c2 - SIGN( 1._long, c2 - c1 )*side
+
+  distance = sqrt( (a2 - a1 )**2 + ( b2 - b1 )**2 + ( c2 - c1 )**2 )
+  RETURN
+  
+END FUNCTION distance
+
+FUNCTION comp( q1, q2 )
+  ! purpose:
+  
+IMPLICIT NONE
+real( long ), intent( in ) :: q1, q2
+real( long ) :: comp
+! local var
+real( long ) :: a1, a2, b1, b2, c1, c2
+a1 = q1; a2 = q2
+
+if( abs( a1-a2 ) > 0.5 ) a2 = a2 - sign( 1.0_long, a2 - a1 )
+comp = a2 - a1
+
+END FUNCTION comp
+
+SUBROUTINE rescale_temp( d_temp, v_mean, vx, vy, vz )
+  ! Purpose: this subroutine rescales the velocities, given a desired value of the temperature
+  !          it takes as inputs the desired temperature and ???
+
+  IMPLICIT NONE
+  real( long ), intent( in ) :: d_temp, v_mean
+  real( long ), dimension( 1:NOS ), intent( inout ) :: vx, vy, vz
+  ! local var
+  real( long ) :: a_temp
+  integer :: k
+	
+	a_temp =  v_mean / ( 2 * NOS )
+	
+	vx = vx * sqrt( d_temp / a_temp )
+	vy = vy * sqrt( d_temp / a_temp )
+	vz = vz * sqrt( d_temp / a_temp )
+
+END SUBROUTINE rescale_temp
+
+END MODULE init
 
 MODULE dynamic_list
  
@@ -31,7 +175,12 @@ MODULE dynamic_list
      INTEGER :: data 
      TYPE( node ), POINTER :: nxtPtr
   ENDTYPE node
-  
+
+  TYPE ptr2node
+   ! I define a pointer to the node type in order to define an "array of pointers"
+     TYPE( node ), POINTER :: Ptr
+  END TYPE ptr2node
+
 CONTAINS
 
   SUBROUTINE add_node( headPtr, tailPtr, val )
@@ -106,51 +255,42 @@ CONTAINS
   
 ENDMODULE dynamic_list
 
-!*****************************************************************************************************************************************************************************************************************
+!****************************************************************************************************************************************************************************************************************
 !   THE MASSES, SIGMA AND EPSILON ARE ALL NORMALISED TO 1 SO THAT ALL DISTANCES ARE MEASURED IN UNITS OF SIGMA AND ALL ENERGIES ARE MEASURED IN UNITS OF EPSILON
-!*****************************************************************************************************************************************************************************************************************
-!*****************************************************************************************************************************************************************************************************************
+!****************************************************************************************************************************************************************************************************************
+!****************************************************************************************************************************************************************************************************************
 !                                                         START OF MAIN PROGRAM
-!*****************************************************************************************************************************************************************************************************************
-!*****************************************************************************************************************************************************************************************************************
+!****************************************************************************************************************************************************************************************************************
+!****************************************************************************************************************************************************************************************************************
 
 PROGRAM soft_spheres
 
-use prec_def
-use constants
+USE prec_def
+USE constants
+USE init
+USE dynamic_list
 
 ! VARIABLE DECLARATION
 IMPLICIT NONE
-REAL( long ) :: v_mean, r
+REAL( long ) :: v_mean, r, time
 REAL( long ), dimension( 1:NOS ) :: rx, ry, rz, vx, vy, vz, fx, fy, fz 
-REAL( long ) :: distance, comp ! delcaration of function distance
+
 INTEGER :: i, j, iter
-INTEGER, PARAMETER :: SCALE_STEP = 10
+INTEGER :: flag = 0
 
-interface
+TYPE( ptr2node ) :: listH, listT  ! these variables contain the pointers to the head and the tail of the "list", see notes
+TYPE( ptr2node ), DIMENSION( 1:NOS ) :: npoint ! same as in the notes but instead of containing the position inside the list it points to the first occurence
 
-subroutine init_cond( x, y, z, vx, vy, vz )
-use prec_def
-use constants
-implicit none
-real( long ), dimension( 1: NOS ), intent( out ) :: x, y, z, vx, vy, vz
-end subroutine init_cond
-
-subroutine rescale_temp( d_temp, v_mean, vx, vy, vz )
-	use prec_def
-	use constants
-	implicit none
-	real( long ), intent( in ) :: d_temp, v_mean
-	real( long ), dimension( 1:NOS ), intent( inout ) :: vx, vy, vz
-endsubroutine rescale_temp
-
-end interface 
 
 ! vol = NOS / rho ! the volume is fixed by the densisty
 
+NULLIFY( listH%Ptr, listT%Ptr ) ! list is empty
+FORALL( i = 1:NOS )npoint( i )%Ptr => NULL() ! all pointers in the array are nullified
+time = 0 ! the time of the simulation is set to zero at the begininng
+
 ! STEP 1: INITIALISATION
 
-call init_cond( rx, ry, rz, vx, vy, vz ) ! first initialization of the system, no total energy / temperature assumed
+CALL init_cond( rx, ry, rz, vx, vy, vz ) ! first initialization of the system, no total energy / temperature assumed
 
 open( unit = 1, file = "posit.dat", status = "replace", access = "sequential", position = "rewind" ) ! opening file of positions
 
@@ -181,8 +321,36 @@ ENDDO
 !	end do
 !enddo step
 
-close( unit = 1 )
-end program soft_spheres
+! STEP 2: TERMALISATION
+! the list should be destroyed after 10 time steps of simulation
+build_list: DO i = 1, NOS
+   flag = 0
+   DO j = i+1,  NOS
+      IF( distance( rx(i), ry(i), rz(i), rx(j), ry(j), rz(j) ) <= r_L ) THEN
+         CALL add_node( listH%Ptr, listT%Ptr, j )
+         IF( flag == 0 ) THEN ! it means that it is the first occurrence
+            npoint( i )%Ptr => listT%Ptr
+            flag = 1 
+         ENDIF
+      ENDIF
+   ENDDO
+   IF( flag == 0 ) NULLIFY( npoint( i )%Ptr ) ! in this case no particle j>i is at distance < r_L
+ENDDO build_list
+
+! CALL print_list( listH%Ptr, listT%Ptr )
+
+! DO i= 1, NOS
+!    IF( .NOT.ASSOCIATED( npoint(i)%Ptr) ) THEN
+!       WRITE( *, * ) 0
+!    ELSE
+!       PRINT *, npoint( i )%Ptr%data
+!    ENDIF
+! ENDDO
+
+
+CLOSE( unit = 1 )
+
+ENDPROGRAM soft_spheres
 
 !****************************************************************************************************************************************************************************************************************
 !****************************************************************************************************************************************************************************************************************
@@ -190,133 +358,3 @@ end program soft_spheres
 !****************************************************************************************************************************************************************************************************************
 !****************************************************************************************************************************************************************************************************************
 
-
-subroutine init_cond( x, y, z, vx, vy, vz )
-  ! purpose: this subroutine initialises the system, assigning positions on a regular lattice and random velocities 
-use prec_def
-use constants
-implicit none
-real( long ), dimension( 1: NOS ), intent( out ) :: x, y, z, vx, vy, vz
-integer :: n
-real( long ) :: side, step
-integer :: i
-
-! variables for generating random values
-real( long ) :: randnum, K, vxc, vyc, vzc ! K = kinetic energy per particle
-integer, dimension( : ), allocatable:: seed
-integer, dimension( 1:8 ) :: dt_seed
-integer :: n_seed
-
-n = nint( NOS**(1.0/3.0) )
-side = ( NOS / rho )**(1.0/3.0) 
-step = side / n
-
-! assigning positions
-do i = 1, NOS
-   x( i ) = step * ( 1/2.0 + mod( i - 1 , n ) )
-   y( i ) = step * ( 1/2.0 + mod( ( i - 1 ) / n , n ) )
-   z( i ) = step * ( 1/2.0 + ( i - 1 ) / (n*n) )
-enddo
-
-! setting seed for speen generator
-call random_seed( size = n_seed )
-allocate( seed( 1:n_seed ) )
-call random_seed( get = seed )
-call date_and_time( values = dt_seed )
-seed( n_seed ) = dt_seed( 8 ); seed( 1 ) = dt_seed( 8 ) * dt_seed( 7 ) * dt_seed( 6 )
-call random_seed( put = seed )
-deallocate( seed )
-! done setting seed
-
-! assigning random velocities
-do i= 1, NOS
-   call random_number( randnum )
-   vx( i ) = 2*randnum - 1
-end do
-do i= 1, NOS
-   call random_number( randnum )
-   vy( i ) = 2*randnum - 1
-end do
-do i= 1, NOS
-   call random_number( randnum )
-   vz( i ) = 2*randnum - 1
-end do
-
-! computing the cm velocitiy
-vxc = 0; vyc = 0; vzc = 0
-do i = 1, NOS
-   vxc = vxc + vx( i ) / NOS
- vyc = vyc + vy( i ) / NOS
- vzc = vzc + vz( i ) / NOS
-end do
-! subtracting the cm velocity
-do i = 1, NOS
-   vx( i ) = vx( i ) -vxc
-   vy( i ) = vy( i ) - vyc
-   vz( i ) = vz( i ) - vzc
-end do
-! verifying cm velocity = 0
-vxc = 0; vyc = 0; vzc = 0
-do i = 1, NOS
-   vxc = vxc + vx( i )
-   vyc = vyc + vy( i )
-   vzc = vzc + vz( i )
-end do
-
-K = ( dot_product( x, x ) + dot_product( y, y ) + dot_product( z, z ) ) / ( 2.0 * NOS )
-
-end subroutine init_cond
-
-
-!!! COORECT 0.5 WITH 0.5 * SIDE AND SO ON
-function distance( x1, y1, z1, x2, y2, z2 )
-use prec_def
-implicit none
-real( long ), intent( in ) :: x1, x2, y1, y2, z1, z2
-real( long ) :: distance
-! local var
-real( long ) :: a1, a2, b1, b2, c1, c2
-a1 = x1; a2 = x2; b1 = y1; b2 = y2; c1 = z1; c2 = z2
-
-if( abs( a1-a2 ) > 0.5 ) a2 = a2 - sign( 1.0_long, a2 - a1 )
-if( abs( b1-b2 ) > 0.5 ) b2 = b2 - sign( 1.0_long, b2 - b1 )
-if( abs( c1-c2 ) > 0.5 ) c2 = c2 - sign( 1.0_long, c2 - c1 )
-
-distance = sqrt( (a2 - a1 )**2 + ( b2 - b1 )**2 + ( c2 - c1 )**2 )
-
-end function distance
-
-function comp( q1, q2 )
-  ! purpose: 
-use prec_def
-implicit none
-real( long ), intent( in ) :: q1, q2
-real( long ) :: comp
-! local var
-real( long ) :: a1, a2, b1, b2, c1, c2
-a1 = q1; a2 = q2
-
-if( abs( a1-a2 ) > 0.5 ) a2 = a2 - sign( 1.0_long, a2 - a1 )
-comp = a2 - a1
-
-end function comp
-
-subroutine rescale_temp( d_temp, v_mean, vx, vy, vz )
-  ! purpose: this subroutine rescales the velocities, given a desired value of the temperature
-  !          it takes as inputs the desired temperature and ???
-	use prec_def
-	use constants
-	implicit none
-	real( long ), intent( in ) :: d_temp, v_mean
-	real( long ), dimension( 1:NOS ), intent( inout ) :: vx, vy, vz
-	! local var
-	real( long ) :: a_temp
-	integer :: k
-	
-	a_temp =  v_mean / ( 2 * NOS )
-	
-	vx = vx * sqrt( d_temp / a_temp )
-	vy = vy * sqrt( d_temp / a_temp )
-	vz = vz * sqrt( d_temp / a_temp )
-
-end subroutine rescale_temp
