@@ -3,7 +3,7 @@ MODULE prec_def
   ! Purpose: this module defines the precision on REAL type
 IMPLICIT NONE
 SAVE
-INTEGER, PARAMETER :: long = selected_real_kind( 18,307 )
+INTEGER, PARAMETER :: long = selected_real_kind( 18,4 )
 ENDMODULE prec_def
 
 MODULE constants
@@ -13,9 +13,9 @@ MODULE constants
 USE prec_def
 IMPLICIT NONE
 SAVE
-INTEGER, PARAMETER :: NOS = 9, MAX_ITER = 100 ! NOS = number of spheres, MAX_ITER = maximum number of iterations of the program
+INTEGER, PARAMETER :: NOS = 100, MAX_ITER = 10000 ! NOS = number of spheres, MAX_ITER = maximum number of iterations of the program
 REAL( long ), PARAMETER :: e_D = -2.98 ! energy per particle to impose
-REAL( long ), PARAMETER :: rho = 0.3, deltat = 0.001, r_c = 2.5, r_L = 2.8, F_c = -0.039, u_c = -0.0163 ! density, time interval, core distance, effective core distance, force and potential energy at r_c
+REAL( long ), PARAMETER :: rho = 0.7, deltat = 0.001, r_c = 2.5, r_L = 2.8, F_c = -0.039, u_c = -0.0163 ! density, time interval, core distance, effective core distance, force and potential energy at r_c
 REAL(long), PARAMETER :: PI = 3.14159265358979323846264338327950288419716939937510_long, ETA_M = PI/4
 END MODULE constants
 
@@ -128,7 +128,7 @@ FUNCTION pot_energy( r )
   REAL( long ) :: pot_energy
 
   IF( r <= r_c ) THEN
-     pot_energy = 4 * ( (1./r)**(12) - (1./r)**6 ) - u_c - (r-r_c) * (-F_c)
+     pot_energy = 4. * ( (1./r)**(12.) - (1./r)**6. ) - u_c - (r-r_c) * (-F_c)
   ELSE
      pot_energy = 0
   ENDIF
@@ -305,7 +305,7 @@ CONTAINS
        ENDIF
     ENDDO
     NULLIFY( tailPtr )
-    WRITE( *, * ) 'List is NOW empty.'
+    ! WRITE( *, * ) 'List is NOW empty.'
     
   ENDSUBROUTINE kill_list
 
@@ -367,7 +367,7 @@ TYPE( ptr2node ) :: tmp ! this pointer is needed to skim the list
 
 ! computing some quantities neeeded throughout the program
 ! these variables MUST NOT be touched elsewhere
-n = nint( NOS**(1.0/3.0) )
+n = CEILING( NOS**(1.0/3.0) ) 
 side = ( NOS / rho )**(1.0/3.0) 
 step = side / n
 
@@ -380,10 +380,11 @@ time = 0
 
 
 ! STEP 1: INITIALISATION
-
+PRINT *, N
 CALL init_cond( rx, ry, rz, vx, vy, vz ) ! first initialization of the system, no total energy / temperature assumed
 
 open( unit = 1, file = "posit.dat", status = "replace", access = "sequential", position = "rewind" ) ! opening file of positions
+OPEN( UNIT = 2, FILE = "energy.dat", STATUS = "replace", ACCESS = "sequential", POSITION = "rewind" )
 
 DO i = 1, NOS
    WRITE( unit = 1, fmt = 1 ) rx( i ), ry( i ) , rz( i )
@@ -418,7 +419,7 @@ ENDDO
 
 evolution: DO iter = 0, MAX_ITER
 
-   refresh_list: IF( MOD( iter, 10 ) == 0 ) THEN ! refresh list every 10 time steps (as suggested in the notes)
+   refresh_list: IF( MOD( iter, 3 ) == 0 ) THEN ! refresh list every 10 time steps (as suggested in the notes)
       
       CALL kill_list( listH%Ptr, listT%Ptr )
       
@@ -462,7 +463,8 @@ evolution: DO iter = 0, MAX_ITER
                ! it means that we have reached the next group of interacting particles, and the loop must be ended; if no next element can be found then the loop is eneded when tmp%Ptr reaches NULL()
                j = tmp%Ptr%data ! set the index of the second particle
                ! PRINT *, j
-               r = distance( rx( i ), ry( i ), rx( i ), rx( j ), ry( j ), rz( j ) )
+               r = distance( rx( i ), ry( i ), rz( i ), rx( j ), ry( j ), rz( j ) )
+               IF( r == 0) PRINT *, i,j,r, side ! to delete
                fx( i ) = fx( i ) + force( rx( i ), rx( j ), r )
                fy( i ) = fy( i ) + force( ry( i ), ry( j ), r )
                fz( i ) = fz( i ) + force( rz( i ), rz( j ), r )
@@ -481,27 +483,33 @@ evolution: DO iter = 0, MAX_ITER
 
       ! compute the acceleration at time: time = 0
       FORALL( i = 1 : NOS )
-         ax( i ) = -fx( i )
-         ay( i ) = -fy( i )
-         az( i ) = -fz( i )
+         ax( i ) = fx( i )
+         ay( i ) = fy( i )
+         az( i ) = fz( i )
       ENDFORALL
       ! compute the energy
-      kin = (1./2.) * ( DOT_PRODUCT( vx, vx ) + DOT_PRODUCT( vy, vy ) + DOT_PRODUCT( vz, vz ) )
+      kin = (1./2._long) * ( DOT_PRODUCT( vx, vx ) + DOT_PRODUCT( vy, vy ) + DOT_PRODUCT( vz, vz ) )
       pot = SUM( u )
       mec = kin + pot
 
+      PRINT *, kin, pot, mec, e_D
       ! SCALE VELOCITIES FOR A GIVEN VALUE OF ENERGY PER PARTICLE
       ! uncomment the following if the energy per particle is fixed
       DO i = 1, NOS
          v = sqrt( vx( i )**2 + vy( i )**2 + vz( i )**2 )
-         vx( i ) = vx( i ) * ( vx( i ) / v ) * sqrt( ( e_d - pot/NOS ) / ( kin/NOS - pot/NOS ) )
-         vy( i ) = vy( i ) * ( vy( i ) / v ) * sqrt( ( e_d - pot/NOS ) / ( kin/NOS - pot/NOS ) )
-         vz( i ) = vz( i ) * ( vz( i ) / v ) * sqrt( ( e_d - pot/NOS ) / ( kin/NOS - pot/NOS ) )
-      ENDDO
-      
+         vx( i ) = vx( i ) * sqrt( ( e_D - pot/NOS ) / ( kin/NOS ) )
+         vy( i ) = vy( i ) * sqrt( ( e_D - pot/NOS ) / ( kin/NOS ) )
+         vz( i ) = vz( i ) * sqrt( ( e_D - pot/NOS ) / ( kin/NOS ) )
+        ENDDO
+      ! compute the energy after rescaling
+      kin = (1./2._long) * ( DOT_PRODUCT( vx, vx ) + DOT_PRODUCT( vy, vy ) + DOT_PRODUCT( vz, vz ) )
+      pot = SUM( u )
+      mec = kin + pot
+      PRINT *, kin, pot, mec
    ENDIF time_zero
 
    ! print "time\t energy" on file 
+   WRITE( UNIT = 2, FMT = '(f5.3,f20.4)'  ) time, mec
    
    time = time + deltat
    kin = 0; pot = 0; mec = 0;
@@ -550,15 +558,15 @@ evolution: DO iter = 0, MAX_ITER
             ! it means that we have reached the next group of interacting particles, and the loop must be ended; if no next element can be found then the loop is eneded when tmp%Ptr reaches NULL()
             j = tmp%Ptr%data ! set the index of the second particle
             ! PRINT *, j
-            r = distance( rx( i ), ry( i ), rx( i ), rx( j ), ry( j ), rz( j ) )
-            fx( i ) = fx( i ) + force( rx( i ), rx( j ), r )
-            fy( i ) = fy( i ) + force( ry( i ), ry( j ), r )
-            fz( i ) = fz( i ) + force( rz( i ), rz( j ), r )
+            r = distance( rx( i ), ry( i ), rz( i ), rx( j ), ry( j ), rz( j ) )
+            fx( i ) = fx( i ) - force( rx( i ), rx( j ), r )
+            fy( i ) = fy( i ) - force( ry( i ), ry( j ), r )
+            fz( i ) = fz( i ) - force( rz( i ), rz( j ), r )
             u( i ) = u( i ) + pot_energy( r )
             ! we must also account for the tmp%Ptr%data particle which experiments an equal but opposite force
-            fx( j ) = fx( j ) + force( rx( j ), rx( i ), r )
-            fy( j ) = fy( j ) + force( ry( j ), ry( i ), r )
-            fz( j ) = fz( j ) + force( rz( j ), rz( i ), r )
+            fx( j ) = fx( j ) - force( rx( j ), rx( i ), r )
+            fy( j ) = fy( j ) - force( ry( j ), ry( i ), r )
+            fz( j ) = fz( j ) - force( rz( j ), rz( i ), r )
             u( j ) = u( j ) + pot_energy( r )
             ! go to the next element in the list
             tmp%Ptr => tmp%Ptr%nxtPtr
@@ -569,9 +577,9 @@ evolution: DO iter = 0, MAX_ITER
 
    ! compute the acceleration at time: time + deltat
    FORALL( i = 1 : NOS )
-      ax( i ) = -fx( i )
-      ay( i ) = -fy( i )
-      az( i ) = -fz( i )
+      ax( i ) = fx( i )
+      ay( i ) = fy( i )
+      az( i ) = fz( i )
    ENDFORALL
 
    ! 4. velocities at time: time + deltat
@@ -605,7 +613,7 @@ ENDDO evolution
 
 
 CLOSE( unit = 1 )
-
+CLOSE( UNIT = 2 )
 ENDPROGRAM soft_spheres
 
 !****************************************************************************************************************************************************************************************************************
