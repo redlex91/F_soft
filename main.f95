@@ -1,22 +1,22 @@
 ! Declaration of modules
 MODULE prec_def
   ! Purpose: this module defines the precision on REAL type
-IMPLICIT NONE
-SAVE
-INTEGER, PARAMETER :: long = selected_real_kind( 18,4 )
+  IMPLICIT NONE
+  SAVE
+  INTEGER, PARAMETER :: qp = selected_real_kind( 33, 4931 )
 ENDMODULE prec_def
 
 MODULE constants
   ! Purpose: declare all the constants used in the program,
   !          so that they are available to both the main
   !          and all the subroutines
-USE prec_def
-IMPLICIT NONE
-SAVE
-INTEGER, PARAMETER :: NOS = 100, MAX_ITER = 10000 ! NOS = number of spheres, MAX_ITER = maximum number of iterations of the program
-REAL( long ), PARAMETER :: e_D = -2.98 ! energy per particle to impose
-REAL( long ), PARAMETER :: rho = 0.7, deltat = 0.001, r_c = 2.5, r_L = 2.8, F_c = -0.039, u_c = -0.0163 ! density, time interval, core distance, effective core distance, force and potential energy at r_c
-REAL(long), PARAMETER :: PI = 3.14159265358979323846264338327950288419716939937510_long, ETA_M = PI/4
+  USE prec_def
+  IMPLICIT NONE
+  SAVE
+  INTEGER, PARAMETER :: NOS = 100, MAX_ITER = 10000000 ! NOS = number of spheres, MAX_ITER = maximum number of iterations of the program
+  REAL( qp ), PARAMETER :: e_D = -2.98 ! energy per particle to impose
+  REAL( qp ), PARAMETER :: rho = 0.7, deltat = 0.0001, r_c = 2.5, r_L = 2.80, F_c = -0.0389994774528, u_c = -0.0163 ! density, time interval, core distance, effective core distance, force and potential energy at r_c
+  REAL( qp ), PARAMETER :: PI = 3.14159265358979323846264338327950288419716939937510, ETA_M = PI/4
 END MODULE constants
 
 MODULE global
@@ -28,112 +28,134 @@ MODULE global
 
   IMPLICIT NONE
   SAVE
-  REAL( long ) :: side, step ! side of the cube and initial separation of the particles
+  REAL( qp ) :: side, step ! side of the cube and initial separation of the particles
   INTEGER :: n ! cube root of NOS rounded to the nearest integer
 
 CONTAINS
 
   FUNCTION distance( x1, y1, z1, x2, y2, z2 )
 
-  ! Purpose: it takes as arguments the coordinates of two particles and returns the distance between them,
-  !          accounting for the boundary conditions
+    ! Purpose: it takes as arguments the coordinates of two particles and returns the distance between them,
+    !          accounting for the boundary conditions
 
-  IMPLICIT NONE
-  REAL( long ), INTENT( in ) :: x1, x2, y1, y2, z1, z2
-  REAL( long ) :: distance
-  ! local var
-  REAL( long ) :: a1, a2, b1, b2, c1, c2
-  a1 = x1; a2 = x2; b1 = y1; b2 = y2; c1 = z1; c2 = z2
+    IMPLICIT NONE
+    REAL( qp ), INTENT( in ) :: x1, x2, y1, y2, z1, z2
+    REAL( qp ) :: distance
+    ! local var
+    REAL( qp ) :: a1, a2, b1, b2, c1, c2
+    a1 = x1; a2 = x2; b1 = y1; b2 = y2; c1 = z1; c2 = z2
 
-  IF( ABS( a1-a2 ) > 0.5*side ) a2 = a2 - SIGN( 1._long, a2 - a1 )*side
-  IF( ABS( b1-b2 ) > 0.5*side ) b2 = b2 - SIGN( 1._long, b2 - b1 )*side
-  IF( ABS( c1-c2 ) > 0.5*side ) c2 = c2 - SIGN( 1._long, c2 - c1 )*side
+    IF( ABS( a1-a2 ) > 0.5*side ) a2 = a2 - SIGN( 1._qp, a2 - a1 )*side
+    IF( ABS( b1-b2 ) > 0.5*side ) b2 = b2 - SIGN( 1._qp, b2 - b1 )*side
+    IF( ABS( c1-c2 ) > 0.5*side ) c2 = c2 - SIGN( 1._qp, c2 - c1 )*side
 
-  distance = sqrt( (a2 - a1 )**2 + ( b2 - b1 )**2 + ( c2 - c1 )**2 )
-  RETURN
-  
-END FUNCTION distance
+    distance = sqrt( (a2 - a1 )**2. + ( b2 - b1 )**2. + ( c2 - c1 )**2. )
+    RETURN
 
-FUNCTION comp( q1, q2 )
-  
-  ! Purpose: this function computes the difference between the same components of a vector
-  
-  IMPLICIT NONE
-  REAL( long ), INTENT( in ) :: q1, q2
-  REAL( long ) :: comp
-  ! local var
-  REAL( long ) :: a1, a2, b1, b2, c1, c2
-  a1 = q1; a2 = q2
+  END FUNCTION distance
 
-  IF( ABS( a1-a2 ) > 0.5*side ) a2 = a2 - SIGN( 1.0_long, a2 - a1 )*side
-  comp = a2 - a1
-  RETURN
+  FUNCTION distance1( x1, y1, z1, x2, y2, z2 )
 
-END FUNCTION comp
+    IMPLICIT NONE
+    REAL( qp ), INTENT( in ) :: x1, y1, z1, x2, y2, z2
+    REAL( qp ) :: distance1
 
-FUNCTION find_next( current, array )
+    distance1 = SQRT( (x1 - x2)**2 + (y1 - y2)**2 + (z1 - z2)**2 )
+    RETURN
+  ENDFUNCTION distance1
 
-  ! Purpose: it looks for the next non-NULL pointer in the npoint array from
-  !          the current position and returns its position; if no such pointer
-  !          can be found it returns NOS
+  FUNCTION comp( q1, q2 )
 
-  USE prec_def
-  USE constants
-  USE dynamic_list
-  
-  IMPLICIT NONE
-  TYPE( ptr2node ), DIMENSION( 1: NOS ), INTENT( in ) :: array
-  INTEGER, INTENT( in ) :: current
-  INTEGER :: find_next
-  INTEGER :: k
+    ! Purpose: this function computes the difference between the same components of a vector
 
-  find_next = NOS
-  DO k = current + 1, NOS
-     IF( ASSOCIATED( array( k )%Ptr ) ) THEN
-        find_next = k
-        EXIT
-     ENDIF
-  ENDDO
-  RETURN
+    IMPLICIT NONE
+    REAL( qp ), INTENT( in ) :: q1, q2
+    REAL( qp ) :: comp
+    ! local var
+    REAL( qp ) :: a1, a2, b1, b2, c1, c2
+    a1 = q1; a2 = q2
 
-ENDFUNCTION find_next
+    IF( ABS( a1-a2 ) > 0.5*side ) a2 = a2 - SIGN( 1._qp, a2 - a1 )*side
+    comp = a2 - a1
+    RETURN
 
-FUNCTION force( x1, x2, r )
+  END FUNCTION comp
 
-  ! Purpose: this function returns the value of the force along one component
+  FUNCTION comp1( q1, q2 )
 
-  USE prec_def
-  USE constants
-  
-  IMPLICIT NONE
-  REAL( long ), INTENT( in ) :: x1, x2, r
-  REAL( long ) :: force
+    IMPLICIT NONE
+    REAL( qp ), INTENT( in ) :: q1, q2
+    REAL( qp ) :: comp1
 
-  IF( r <= r_c ) THEN
-     force = 24. * ( 2.*(1./r)**(13.) - (1./r)**(7.) + (-F_c)  )* comp( x1, x2 ) / r
-  ELSE
-     force = 0
-  ENDIF
-  RETURN
-  
-ENDFUNCTION force
+    comp1 = q2 - q1
+    RETURN
 
-FUNCTION pot_energy( r )
+  ENDFUNCTION comp1
 
-  USE prec_def
-  USE constants
-  
-  IMPLICIT NONE
-  REAL( long ), INTENT( in ) :: r
-  REAL( long ) :: pot_energy
+  FUNCTION find_next( current, array )
 
-  IF( r <= r_c ) THEN
-     pot_energy = 4. * ( (1./r)**(12.) - (1./r)**6. ) - u_c - (r-r_c) * (-F_c)
-  ELSE
-     pot_energy = 0
-  ENDIF
-  RETURN
-ENDFUNCTION pot_energy
+    ! Purpose: it looks for the next non-NULL pointer in the npoint array from
+    !          the current position and returns its position; if no such pointer
+    !          can be found it returns NOS
+
+    USE prec_def
+    USE constants
+    USE dynamic_list
+
+    IMPLICIT NONE
+    TYPE( ptr2node ), DIMENSION( 1: NOS ), INTENT( IN ) :: array
+    INTEGER, INTENT( in ) :: current
+    INTEGER :: find_next
+    INTEGER :: k
+
+    find_next = NOS
+    DO k = current + 1, NOS
+       IF( ASSOCIATED( array( k )%Ptr ) ) THEN
+          find_next = k
+          EXIT
+       ENDIF
+    ENDDO
+    RETURN
+
+  ENDFUNCTION find_next
+
+  FUNCTION force( x1, x2, r )
+
+    ! Purpose: this function returns the value of the force along one component
+
+    USE prec_def
+    USE constants
+
+    IMPLICIT NONE
+    REAL( qp ), INTENT( in ) :: x1, x2, r
+    REAL( qp ) :: force
+
+    IF( r <= r_c ) THEN
+       force = 24. * ( 2.*(1./r)**(13.) - (1./r)**(7.) - 2.*( (1./r_c)**(13.) -(1./r_c)**(7.) ) ) * comp( x2, x1 ) / r
+    ELSE
+       force = 0
+    ENDIF
+    RETURN
+
+  ENDFUNCTION force
+
+  FUNCTION pot_energy( r )
+
+    USE prec_def
+    USE constants
+
+    IMPLICIT NONE
+    REAL( qp ), INTENT( in ) :: r
+    REAL( qp ) :: pot_energy
+
+    IF( r <= r_c ) THEN
+       pot_energy = 4. * ( (1./r)**(12.) - (1./r)**6. ) - 4. * ( (1./r_c)**(12.) - (1./r_c)**(6.) ) &
+            - ( r - r_c ) * (-24. * ( 2* (1./r_c)**13. - (1/r_c)**7. ) )
+    ELSE
+       pot_energy = 0
+    ENDIF
+    RETURN
+  ENDFUNCTION pot_energy
 
 ENDMODULE global
 
@@ -145,115 +167,115 @@ MODULE init
   USE prec_def
   USE constants
   USE global
- 
+
 CONTAINS
-  
-SUBROUTINE init_cond( x, y, z, vx, vy, vz )
-  ! Purpose: this subroutine initialises the system, assigning positions on a regular lattice and random velocities 
 
-IMPLICIT NONE
-real( long ), dimension( 1: NOS ), intent( out ) :: x, y, z, vx, vy, vz
-integer :: i
+  SUBROUTINE init_cond( x, y, z, vx, vy, vz )
+    ! Purpose: this subroutine initialises the system, assigning positions on a regular lattice and random velocities 
 
-! variables for generating random values
-real( long ) :: randnum, K, vxc, vyc, vzc ! K = kinetic energy per particle
-integer, dimension( : ), allocatable:: seed
-integer, dimension( 1:8 ) :: dt_seed
-integer :: n_seed
+    IMPLICIT NONE
+    REAL( qp ), dimension( 1: NOS ), intent( out ) :: x, y, z, vx, vy, vz
+    integer :: i
+
+    ! variables for generating random values
+    REAL( qp ) :: randnum, K, vxc, vyc, vzc ! K = kinetic energy per particle
+    integer, dimension( : ), allocatable:: seed
+    integer, dimension( 1:8 ) :: dt_seed
+    integer :: n_seed
 
 
-! assigning positions
-do i = 1, NOS
-   x( i ) = step * ( 1/2.0 + mod( i - 1 , n ) )
-   y( i ) = step * ( 1/2.0 + mod( ( i - 1 ) / n , n ) )
-   z( i ) = step * ( 1/2.0 + ( i - 1 ) / (n*n) )
-enddo
+    ! assigning positions
+    do i = 1, NOS
+       x( i ) = step * ( 1/2.0 + mod( i - 1 , n ) )
+       y( i ) = step * ( 1/2.0 + mod( ( i - 1 ) / n , n ) )
+       z( i ) = step * ( 1/2.0 + ( i - 1 ) / (n*n) )
+    enddo
 
-! setting seed for speen generator
-call random_seed( size = n_seed )
-allocate( seed( 1:n_seed ) )
-call random_seed( get = seed )
-call date_and_time( values = dt_seed )
-seed( n_seed ) = dt_seed( 8 ); seed( 1 ) = dt_seed( 8 ) * dt_seed( 7 ) * dt_seed( 6 )
-call random_seed( put = seed )
-deallocate( seed )
-! done setting seed
+    ! setting seed for speen generator
+    call random_seed( size = n_seed )
+    allocate( seed( 1:n_seed ) )
+    call random_seed( get = seed )
+    call date_and_time( values = dt_seed )
+    seed( n_seed ) = dt_seed( 8 ); seed( 1 ) = dt_seed( 8 ) * dt_seed( 7 ) * dt_seed( 6 )
+    call random_seed( put = seed )
+    deallocate( seed )
+    ! done setting seed
 
-! assigning random velocities
-do i= 1, NOS
-   call random_number( randnum )
-   vx( i ) = 2*randnum - 1
-end do
-do i= 1, NOS
-   call random_number( randnum )
-   vy( i ) = 2*randnum - 1
-end do
-do i= 1, NOS
-   call random_number( randnum )
-   vz( i ) = 2*randnum - 1
-end do
+    ! assigning random velocities
+    do i= 1, NOS
+       call random_number( randnum )
+       vx( i ) = 2*randnum - 1
+    end do
+    do i= 1, NOS
+       call random_number( randnum )
+       vy( i ) = 2*randnum - 1
+    end do
+    do i= 1, NOS
+       call random_number( randnum )
+       vz( i ) = 2*randnum - 1
+    end do
 
-! computing the cm velocitiy
-vxc = 0; vyc = 0; vzc = 0
-do i = 1, NOS
-   vxc = vxc + vx( i ) / NOS
- vyc = vyc + vy( i ) / NOS
- vzc = vzc + vz( i ) / NOS
-end do
-! subtracting the cm velocity
-do i = 1, NOS
-   vx( i ) = vx( i ) -vxc
-   vy( i ) = vy( i ) - vyc
-   vz( i ) = vz( i ) - vzc
-end do
-! verifying cm velocity = 0
-vxc = 0; vyc = 0; vzc = 0
-do i = 1, NOS
-   vxc = vxc + vx( i )
-   vyc = vyc + vy( i )
-   vzc = vzc + vz( i )
-end do
+    ! computing the cm velocitiy
+    vxc = 0; vyc = 0; vzc = 0
+    do i = 1, NOS
+       vxc = vxc + vx( i ) / NOS
+       vyc = vyc + vy( i ) / NOS
+       vzc = vzc + vz( i ) / NOS
+    end do
+    ! subtracting the cm velocity
+    do i = 1, NOS
+       vx( i ) = vx( i ) -vxc
+       vy( i ) = vy( i ) - vyc
+       vz( i ) = vz( i ) - vzc
+    end do
+    ! verifying cm velocity = 0
+    vxc = 0; vyc = 0; vzc = 0
+    do i = 1, NOS
+       vxc = vxc + vx( i )
+       vyc = vyc + vy( i )
+       vzc = vzc + vz( i )
+    end do
 
-K = ( dot_product( x, x ) + dot_product( y, y ) + dot_product( z, z ) ) / ( 2.0 * NOS )
+    K = ( dot_product( x, x ) + dot_product( y, y ) + dot_product( z, z ) ) / ( 2.0 * NOS )
 
-END SUBROUTINE init_cond
+  END SUBROUTINE init_cond
 
-SUBROUTINE rescale_temp( d_temp, v_mean, vx, vy, vz )
-  ! Purpose: this subroutine rescales the velocities, given a desired value of the temperature
-  !          it takes as inputs the desired temperature and ???
+  SUBROUTINE rescale_temp( d_temp, v_mean, vx, vy, vz )
+    ! Purpose: this subroutine rescales the velocities, given a desired value of the temperature
+    !          it takes as inputs the desired temperature and ???
 
-  IMPLICIT NONE
-  real( long ), intent( in ) :: d_temp, v_mean
-  real( long ), dimension( 1:NOS ), intent( inout ) :: vx, vy, vz
-  ! local var
-  real( long ) :: a_temp
-  integer :: k
-	
-	a_temp =  v_mean / ( 2 * NOS )
-	
-	vx = vx * sqrt( d_temp / a_temp )
-	vy = vy * sqrt( d_temp / a_temp )
-	vz = vz * sqrt( d_temp / a_temp )
+    IMPLICIT NONE
+    real, intent( in ) :: d_temp, v_mean
+    real, dimension( 1:NOS ), intent( inout ) :: vx, vy, vz
+    ! local var
+    real :: a_temp
+    integer :: k
 
-END SUBROUTINE rescale_temp
+    a_temp =  v_mean / ( 2 * NOS )
+
+    vx = vx * sqrt( d_temp / a_temp )
+    vy = vy * sqrt( d_temp / a_temp )
+    vz = vz * sqrt( d_temp / a_temp )
+
+  END SUBROUTINE rescale_temp
 
 END MODULE init
 
 MODULE dynamic_list
- 
+
   ! Purpose: it implements a dynamic list, whose dimension in a priori unknown,
   !          and all the subroutines needed to madeal with it (add node, print,
   !          destroy the entire list after use
-  
+
   IMPLICIT NONE
-  
+
   TYPE :: node
      INTEGER :: data 
      TYPE( node ), POINTER :: nxtPtr
   ENDTYPE node
 
   TYPE ptr2node
-   ! I define a pointer to the node type in order to define an "array of pointers"
+     ! I define a pointer to the node type in order to define an "array of pointers"
      TYPE( node ), POINTER :: Ptr
   END TYPE ptr2node
 
@@ -272,7 +294,7 @@ CONTAINS
     IF( flag == 0 ) THEN ! allocation was ok
        newPtr%data = val
        NULLIFY( newPtr%nxtPtr )
-       
+
        IF( .NOT. ASSOCIATED ( headPtr ) ) THEN ! if list is empty
           headPtr => newPtr 
        ELSE
@@ -306,7 +328,7 @@ CONTAINS
     ENDDO
     NULLIFY( tailPtr )
     ! WRITE( *, * ) 'List is NOW empty.'
-    
+
   ENDSUBROUTINE kill_list
 
   SUBROUTINE print_list( headPtr, tailPtr )
@@ -326,9 +348,9 @@ CONTAINS
        ENDDO
        WRITE( *, * ) 'End of list.'
     ENDIF
-          
+
   ENDSUBROUTINE print_list
-  
+
 ENDMODULE dynamic_list
 
 !****************************************************************************************************************************************************************************************************************
@@ -341,279 +363,308 @@ ENDMODULE dynamic_list
 
 PROGRAM soft_spheres
 
-USE prec_def
-USE constants
-USE init
-USE dynamic_list
-USE global
+  USE prec_def
+  USE constants
+  USE init
+  USE dynamic_list
+  USE global
 
-! VARIABLE DECLARATION
-IMPLICIT NONE
-REAL( long ) :: kin, pot, mec, v_mean, r, v, time ! total kinetic, potential and mechanical energy resp.
-REAL( long ), dimension( 1:NOS ) :: rx, ry, rz,&
-     vx, vy, vz,&
-     fx, fy, fz,&
-     ax, ay, az,&
-     u 
+  ! VARIABLE DECLARATION
+  IMPLICIT NONE
+  REAL( qp ) :: kin, pot, mec, v_mean, r, v, time ! total kinetic, potential and mechanical energy resp.
+  REAL( qp ), dimension( 1:NOS ) :: rx, ry, rz,&
+       vx, vy, vz,&
+       fx, fy, fz,&
+       ax, ay, az,&
+       u 
 
-INTEGER :: i, j, iter
-INTEGER :: flag = 0
+  INTEGER :: i, j, iter
+  INTEGER :: flag = 0
 
-TYPE( ptr2node ) :: listH, listT  ! these variables contain the pointers to the head and the tail of the "list", see notes
-TYPE( ptr2node ), DIMENSION( 1:NOS ) :: npoint ! same as in the notes but instead of containing the position inside the list it points to the first occurence
-TYPE( ptr2node ) :: tmp ! this pointer is needed to skim the list
+  TYPE( ptr2node ) :: listH, listT  ! these variables contain the pointers to the head and the tail of the "list", see notes
+  TYPE( ptr2node ), DIMENSION( 1:NOS ) :: npoint ! same as in the notes but instead of containing the position inside the list it points to the first occurence
+  TYPE( ptr2node ) :: tmp ! this pointer is needed to skim the list
 
-! vol = NOS / rho ! the volume is fixed by the densisty
+  ! these variables are temporary and sould be eliminated
+  REAL( qp ) :: sumx, sumy, sumz
+  REAL( qp ) :: try
+  REAL( qp ) :: forcex, forcey, forcez
 
-! computing some quantities neeeded throughout the program
-! these variables MUST NOT be touched elsewhere
-n = CEILING( NOS**(1.0/3.0) ) 
-side = ( NOS / rho )**(1.0/3.0) 
-step = side / n
+  ! vol = NOS / rho ! the volume is fixed by the densisty
 
-! initialisation of pointer variables: all pointers are nullified for safety reasons
-NULLIFY( listH%Ptr, listT%Ptr, tmp%Ptr ) ! list is empty
-FORALL( i = 1:NOS ) npoint( i )%Ptr => NULL() ! all pointers in the array are nullified
+  ! computing some quantities neeeded throughout the program
+  ! these variables MUST NOT be touched elsewhere
+  n = CEILING( NOS**(1.0/3.0) ) 
+  side = ( NOS / rho )**(1.0/3.0) 
+  step = side / n
 
-! time is set to zero before the start of the program
-time = 0
+  ! initialisation of pointer variables: all pointers are nullified for safety reasons
+  NULLIFY( listH%Ptr, listT%Ptr, tmp%Ptr ) ! list is empty
+  FORALL( i = 1:NOS ) npoint( i )%Ptr => NULL() ! all pointers in the array are nullified
 
-
-! STEP 1: INITIALISATION
-PRINT *, N
-CALL init_cond( rx, ry, rz, vx, vy, vz ) ! first initialization of the system, no total energy / temperature assumed
-
-open( unit = 1, file = "posit.dat", status = "replace", access = "sequential", position = "rewind" ) ! opening file of positions
-OPEN( UNIT = 2, FILE = "energy.dat", STATUS = "replace", ACCESS = "sequential", POSITION = "rewind" )
-
-DO i = 1, NOS
-   WRITE( unit = 1, fmt = 1 ) rx( i ), ry( i ) , rz( i )
-   1 format( f20.15, f20.15, f20.15 )
-ENDDO
-
-!step: do iter = 1, MAX_ITER
-
-!	v_mean = ( dot_product( vx, vx ) + dot_product( vy, vy ) + dot_product( vz, vz ) ) / SCALE_STEP
-!	if( mod( iter, SCALE_STEP ) == 0 ) then
-!		call rescale_temp( 298.0_long, v_mean, vx, vy, vz )
-!		v_mean = 0
-!		print *, iter
-!	endif
-
-!	fx = 0; fy = 0; fz = 0
-!	do i = 1, NOS
-!		do j = 1, NOS
-!			r = distance( rx( i ), ry( i ), rx( i ), rx( j ), ry( j ), rz( j ) )
-!			if(  r <= r_c .and. i.ne.j ) then
-!				fx = fx + 24 * comp( rx( i ), rx( j ) ) * ( 2 * ( 1/r )**14 - ( 1/r )**8 + F_c / 24 )
-!				fy = fy + 24 * comp( ry( i ), ry( j ) ) * ( 2 * ( 1/r )**14 - ( 1/r )**8 + F_c / 24 )
-!				fz = fz + 24 * comp( rz( i ), rz( j ) ) * ( 2 * ( 1/r )**14 - ( 1/r )**8 + F_c / 24 )
-!			end if
-!		enddo
-!	end do
-!enddo step
+  ! time is set to zero before the start of the program
+  time = 0
 
 
-! STEP 2: TERMALISATION
-! the list should be destroyed after 10 time steps of simulation
+  ! STEP 1: INITIALISATION
+  PRINT *, n, side, EPSILON( fx(2) ), EPSILON( try ), HUGE( i )
+  CALL init_cond( rx, ry, rz, vx, vy, vz ) ! first initialization of the system, no total energy / temperature assumed
 
-evolution: DO iter = 0, MAX_ITER
+  open( unit = 1, file = "posit.dat", status = "replace", access = "sequential", position = "rewind" ) ! opening file of positions
+  OPEN( UNIT = 2, FILE = "energy.dat", STATUS = "replace", ACCESS = "sequential", POSITION = "rewind" )
 
-   refresh_list: IF( MOD( iter, 3 ) == 0 ) THEN ! refresh list every 10 time steps (as suggested in the notes)
-      
-      CALL kill_list( listH%Ptr, listT%Ptr )
-      
-      build_list: DO i = 1, NOS
-         flag = 0
-         DO j = i+1,  NOS
-            IF( distance( rx(i), ry(i), rz(i), rx(j), ry(j), rz(j) ) <= r_L ) THEN
-               CALL add_node( listH%Ptr, listT%Ptr, j )
-               IF( flag == 0 ) THEN ! it means that it is the first occurrence
-                  npoint( i )%Ptr => listT%Ptr
-                  flag = 1 
-               ENDIF
-            ENDIF
-         ENDDO
-         IF( flag == 0 ) NULLIFY( npoint( i )%Ptr ) ! in this case no particle j>i is at distance < r_L
-      ENDDO build_list
-      
-   ENDIF refresh_list
+  DO i = 1, NOS
+     WRITE( unit = 1, fmt = 1 ) rx( i ), ry( i ) , rz( i )
+1    format( f20.15, f20.15, f20.15 )
+  ENDDO
 
-   time_zero: IF( time == 0 ) THEN ! compute force, potential energy, acceleration at time = 0
-      
-      ! compute the force at time: time = 0
-      FORALL( i = 1 : NOS )
-         fx( i ) = 0
-         fy( i ) = 0
-         fz( i ) = 0
-         ax( i ) = 0
-         ay( i ) = 0
-         az( i ) = 0
-         u( i ) = 0
-      ENDFORALL
+  ! STEP 2: TERMALISATION
+  ! the list should be destroyed after 10 time steps of simulation
 
-      tmp%Ptr => listH%Ptr  ! the temporary pointer is set at the beginning of the list
+  evolution: DO iter = 0, MAX_ITER
 
-      skim_array_zero: DO i = 1, NOS
-         IF( ASSOCIATED( npoint( i )%Ptr ) ) THEN ! in this case the i-th particle is interacting with another one
-            ! skim the list untill next non-NULL npoint( j )%Ptr
-            ! the last particle's interactions are accounted for in the previous elements of the list so that npoint( NOS )%Ptr => NULL() always
-            skim_list_zero: DO
-               IF( (.NOT.ASSOCIATED(tmp%Ptr)) .OR. ASSOCIATED( tmp%Ptr, npoint( find_next( i, npoint ) )%Ptr ) )   EXIT
-               ! it means that we have reached the next group of interacting particles, and the loop must be ended; if no next element can be found then the loop is eneded when tmp%Ptr reaches NULL()
-               j = tmp%Ptr%data ! set the index of the second particle
-               ! PRINT *, j
-               r = distance( rx( i ), ry( i ), rz( i ), rx( j ), ry( j ), rz( j ) )
-               IF( r == 0) PRINT *, i,j,r, side ! to delete
-               fx( i ) = fx( i ) + force( rx( i ), rx( j ), r )
-               fy( i ) = fy( i ) + force( ry( i ), ry( j ), r )
-               fz( i ) = fz( i ) + force( rz( i ), rz( j ), r )
-               u( i ) = u( i ) + pot_energy( r )
-               ! we must also account for the tmp%Ptr%data particle which experiments an equal but opposite force
-               fx( j ) = fx( j ) + force( rx( j ), rx( i ), r )
-               fy( j ) = fy( j ) + force( ry( j ), ry( i ), r )
-               fz( j ) = fz( j ) + force( rz( j ), rz( i ), r )
-               u( j ) = u( j ) + pot_energy( r )
-               ! go to the next element in the list
-               tmp%Ptr => tmp%Ptr%nxtPtr
-            ENDDO skim_list_zero
-         ENDIF
-         ! otherwise jump to the next particle
-      ENDDO skim_array_zero
+     ! PRINT *, 'Completed: ', REAL(iter)/MAX_ITER*100., '%', ' Energy: ', mec/NOS
 
-      ! compute the acceleration at time: time = 0
-      FORALL( i = 1 : NOS )
-         ax( i ) = fx( i )
-         ay( i ) = fy( i )
-         az( i ) = fz( i )
-      ENDFORALL
-      ! compute the energy
-      kin = (1./2._long) * ( DOT_PRODUCT( vx, vx ) + DOT_PRODUCT( vy, vy ) + DOT_PRODUCT( vz, vz ) )
-      pot = SUM( u )
-      mec = kin + pot
+     ! DO i = 1, NOS
+     !    IF( rx( i ) > side .OR. rx( i ) < 0 ) PRINT *, 'ERROR'
+     !    IF( ry( i ) > side .OR. ry( i ) < 0 ) PRINT *, 'ERROR'
+     !    IF( rz( i ) > side .OR. rz( i ) < 0 ) PRINT *, 'EROOR'
+     ! ENDDO
 
-      PRINT *, kin, pot, mec, e_D
-      ! SCALE VELOCITIES FOR A GIVEN VALUE OF ENERGY PER PARTICLE
-      ! uncomment the following if the energy per particle is fixed
-      DO i = 1, NOS
-         v = sqrt( vx( i )**2 + vy( i )**2 + vz( i )**2 )
-         vx( i ) = vx( i ) * sqrt( ( e_D - pot/NOS ) / ( kin/NOS ) )
-         vy( i ) = vy( i ) * sqrt( ( e_D - pot/NOS ) / ( kin/NOS ) )
-         vz( i ) = vz( i ) * sqrt( ( e_D - pot/NOS ) / ( kin/NOS ) )
+     ! PRINT *, REAL( qp )(iter)/MAX_ITER*100., '%'
+     refresh_list: IF( MOD( iter, 10 ) == 0 ) THEN ! refresh list every 10 time steps (as suggested in the notes)
+
+        CALL kill_list( listH%Ptr, listT%Ptr )
+
+        build_list: DO i = 1, NOS
+           flag = 0
+           DO j = i+1, NOS
+              IF( distance( rx(i), ry(i), rz(i), rx(j), ry(j), rz(j) ) < r_L ) THEN
+                 CALL add_node( listH%Ptr, listT%Ptr, j )
+                 IF( flag == 0 ) THEN ! it means that it is the first occurrence
+                    npoint( i )%Ptr => listT%Ptr
+                    flag = 1 
+                 ENDIF
+              ENDIF
+           ENDDO
+           IF( flag == 0 ) NULLIFY( npoint( i )%Ptr ) ! in this case no particle j>i is at distance < r_L
+        ENDDO build_list
+
+     ENDIF refresh_list
+
+     time_zero: IF( time == 0 ) THEN ! compute force, potential energy, acceleration at time = 0
+
+        ! compute the force at time: time = 0
+        FORALL( i = 1 : NOS )
+           fx( i ) = 0.
+           fy( i ) = 0.
+           fz( i ) = 0.
+           u( i ) = 0.
+        ENDFORALL
+
+        tmp%Ptr => listH%Ptr  ! the temporary pointer is set at the beginning of the list
+
+        skim_array_zero: DO i = 1, NOS
+           IF( ASSOCIATED( npoint( i )%Ptr ) ) THEN ! in this case the i-th particle is interacting with another one
+              ! skim the list untill next non-NULL npoint( j )%Ptr
+              ! the last particle's interactions are accounted for in the previous elements of the list so that npoint( NOS )%Ptr => NULL() always
+              skim_list_zero: DO
+                 IF( (.NOT.ASSOCIATED(tmp%Ptr)) .OR. &
+                      ASSOCIATED( tmp%Ptr, npoint( find_next( i, npoint ) )%Ptr ) )   EXIT
+                 ! it means that we have reached the next group of interacting particles, and the loop must be ended; if no next element can be found then the loop is eneded when tmp%Ptr reaches NULL()
+                 j = tmp%Ptr%data ! set the index of the second particle
+                 ! PRINT *, j
+                 r = distance( rx( i ), ry( i ), rz( i ), rx( j ), ry( j ), rz( j ) )
+                 PRINT *, i, j, r
+
+                 fx( i ) = fx( i ) + force( rx( i ), rx( j ), r )
+                 fy( i ) = fy( i ) + force( ry( i ), ry( j ), r )
+                 fz( i ) = fz( i ) + force( rz( i ), rz( j ), r )
+                 u( i ) = u( i ) + pot_energy( r )
+                 ! we must also account for the tmp%Ptr%data particle which experiments an equal but opposite force
+                 fx( j ) = fx( j ) - force( rx( i ), rx( j ), r )
+                 fy( j ) = fy( j ) - force( ry( i ), ry( j ), r )
+                 fz( j ) = fz( j ) - force( rz( i ), rz( j ), r )
+                 !u( j ) = u( j ) + pot_energy( r )
+                 ! go to the next element in the list
+
+                 tmp%Ptr => tmp%Ptr%nxtPtr
+              ENDDO skim_list_zero
+           ENDIF
+           ! otherwise jump to the next particle
+        ENDDO skim_array_zero
+
+        ! compute the energy
+        kin = (1./2.) * ( DOT_PRODUCT( vx, vx ) + DOT_PRODUCT( vy, vy ) + DOT_PRODUCT( vz, vz ) )
+        pot = SUM( u )
+        mec = kin + pot
+
+        PRINT *, kin, pot, mec, e_D
+        ! SCALE VELOCITIES FOR A GIVEN VALUE OF ENERGY PER PARTICLE
+        ! uncomment the following if the energy per particle is fixed
+        DO i = 1, NOS
+           vx( i ) = vx( i ) * sqrt( ( e_D - pot/NOS ) / ( kin/NOS ) )
+           vy( i ) = vy( i ) * sqrt( ( e_D - pot/NOS ) / ( kin/NOS ) )
+           vz( i ) = vz( i ) * sqrt( ( e_D - pot/NOS ) / ( kin/NOS ) )
         ENDDO
-      ! compute the energy after rescaling
-      kin = (1./2._long) * ( DOT_PRODUCT( vx, vx ) + DOT_PRODUCT( vy, vy ) + DOT_PRODUCT( vz, vz ) )
-      pot = SUM( u )
-      mec = kin + pot
-      PRINT *, kin, pot, mec
-   ENDIF time_zero
 
-   ! print "time\t energy" on file 
-   WRITE( UNIT = 2, FMT = '(f5.3,f20.4)'  ) time, mec
-   
-   time = time + deltat
-   kin = 0; pot = 0; mec = 0;
-   
-   ! VELOCITY-VERLET ALGORYTHM:
-   
-   ! 1. positions at time: time + deltat
-   ! here the accelaration is evaluated at time: time (coming from the time_zero IF or from the previous execution of the evolution DO)
+        ! compute the energy after rescaling
+        kin = (1./2.) * ( DOT_PRODUCT( vx, vx ) + DOT_PRODUCT( vy, vy ) + DOT_PRODUCT( vz, vz ) )
+        pot = 0.
+        DO i = 1, NOS
+           IF( ABS( u( i ) ) > EPSILON( u( i ) ) ) THEN
+              pot = pot + u( i )
+           ENDIF
+        ENDDO
+        mec = kin + pot
+        PRINT *, kin, pot, mec, mec/NOS
+     ENDIF time_zero
 
-   FORALL( i = 1 : NOS )
-      rx( i ) = rx( i ) + vx( i )*deltat + (1./2.)*ax( i )*deltat**2
-      ry( i ) = ry( i ) + vy( i )*deltat + (1./2.)*ay( i )*deltat**2
-      rz( i ) = rz( i ) + vz( i )*deltat + (1./2.)*az( i )*deltat**2
-   ENDFORALL
+     ! print "time\t energy" on file 
+     WRITE( UNIT = 2, FMT = '(F5.3, 3ES12.4E2 )' ) time, kin/NOS, pot/NOS, mec/NOS
 
-   ! 2. velocities at time: time + deltat/2
-   
-   FORALL( i = 1 : NOS )
-      vx( i ) = vx( i ) + (1./2.)*ax( i )*deltat
-      vy( i ) = vy( i ) + (1./2.)*ay( i )*deltat
-      vz( i ) = vz( i ) + (1./2.)*az( i )*deltat
-   ENDFORALL
-
-   ! 3. acceleration at time: time + deltat
-
-   ! compute the force at time: time + deltat
-
-   FORALL( i = 1 : NOS )
-      fx( i ) = 0
-      fy( i ) = 0
-      fz( i ) = 0
-      ax( i ) = 0
-      ay( i ) = 0
-      az( i ) = 0
-      u( i ) = 0
-   ENDFORALL
-
-   tmp%Ptr => listH%Ptr  ! the temporary pointer is set at the beginning of the list
-
-   skim_array: DO i = 1, NOS
-      IF( ASSOCIATED( npoint( i )%Ptr ) ) THEN ! in this case the i-th particle is interacting with another one
-         ! skim the list untill next non-NULL npoint( j )%Ptr
-         ! the last particle's interactions are accounted for in the previous elements of the list so that npoint( NOS )%Ptr => NULL() always
-         skim_list: DO
-            IF( (.NOT.ASSOCIATED(tmp%Ptr)) .OR. ASSOCIATED( tmp%Ptr, npoint( find_next( i, npoint ) )%Ptr ) )   EXIT
-            ! it means that we have reached the next group of interacting particles, and the loop must be ended; if no next element can be found then the loop is eneded when tmp%Ptr reaches NULL()
-            j = tmp%Ptr%data ! set the index of the second particle
-            ! PRINT *, j
-            r = distance( rx( i ), ry( i ), rz( i ), rx( j ), ry( j ), rz( j ) )
-            fx( i ) = fx( i ) - force( rx( i ), rx( j ), r )
-            fy( i ) = fy( i ) - force( ry( i ), ry( j ), r )
-            fz( i ) = fz( i ) - force( rz( i ), rz( j ), r )
-            u( i ) = u( i ) + pot_energy( r )
-            ! we must also account for the tmp%Ptr%data particle which experiments an equal but opposite force
-            fx( j ) = fx( j ) - force( rx( j ), rx( i ), r )
-            fy( j ) = fy( j ) - force( ry( j ), ry( i ), r )
-            fz( j ) = fz( j ) - force( rz( j ), rz( i ), r )
-            u( j ) = u( j ) + pot_energy( r )
-            ! go to the next element in the list
-            tmp%Ptr => tmp%Ptr%nxtPtr
-         ENDDO skim_list
-      ENDIF
-      ! otherwise jump to the next particle
-   ENDDO skim_array
-
-   ! compute the acceleration at time: time + deltat
-   FORALL( i = 1 : NOS )
-      ax( i ) = fx( i )
-      ay( i ) = fy( i )
-      az( i ) = fz( i )
-   ENDFORALL
-
-   ! 4. velocities at time: time + deltat
-   ! here the acceleration is evaluated at time:  time + deltat
-   
-   FORALL( i = 1 : NOS )
-      vx( i ) = vx( i ) + (1./2.) * ax( i ) * deltat
-      vy( i ) = vy( i ) + (1./2.) * ay( i ) * deltat
-      vz( i ) = vz( i ) + (1./2.) * az( i ) * deltat
-   ENDFORALL
-
-   ! End of VELOCITY-VERLET ALGORYTHM
-   
-   ! compute the energy
-   kin = (1./2.) * ( DOT_PRODUCT( vx, vx ) + DOT_PRODUCT( vy, vy ) + DOT_PRODUCT( vz, vz ) )
-   pot = SUM( u )
-   mec = kin + pot
-
-ENDDO evolution
+     ! PRINT *, 't = ',time
+     ! DO i = 1, NOS
+     !    PRINT *, 'particle: ', i
+     !    PRINT *, 'positions: ', rx( i ), ry( i ), rz( i )
+     !    PRINT *, 'velocities: ', vx( i ), vy( i ), vz( i )
+     !    PRINT *, 'accelerations: ', fx( i ), fy( i ), fz( i )
+     ! ENDDO
 
 
-! CALL print_list( listH%Ptr, listT%Ptr )
+     time = time + deltat
+     kin = 0; pot = 0; mec = 0;
 
-! DO i= 1, NOS
-!    IF( .NOT.ASSOCIATED( npoint(i)%Ptr) ) THEN
-!       WRITE( *, * ) 0
-!    ELSE
-!       PRINT *, npoint( i )%Ptr%data
-!    ENDIF
-! ENDDO
+     ! VELOCITY-VERLET ALGORYTHM:
+
+     ! 1. positions at time: time + deltat
+     ! here the accelaration is evaluated at time: time (coming from the time_zero IF or from the previous execution of the evolution DO)
+
+     FORALL( i = 1 : NOS )
+        rx( i ) = rx( i ) + vx( i )*deltat + (1./2.)*fx( i )*deltat**2.
+        ry( i ) = ry( i ) + vy( i )*deltat + (1./2.)*fy( i )*deltat**2.
+        rz( i ) = rz( i ) + vz( i )*deltat + (1./2.)*fz( i )*deltat**2.
+     ENDFORALL
+
+     BC: DO i = 1, NOS 
+        IF( rx( i ) > side .OR. rx( i ) < 0 ) rx( i ) = rx( i ) - FLOOR( rx( i ) / side ) * side
+        IF( ry( i ) > side .OR. ry( i ) < 0 ) ry( i ) = ry( i ) - FLOOR( ry( i ) / side ) * side
+        IF( rz( i ) > side .OR. rz( i ) < 0 ) rz( i ) = rz( i ) - FLOOR( rz( i ) / side ) * side
+     ENDDO BC
 
 
-CLOSE( unit = 1 )
-CLOSE( UNIT = 2 )
+     DO i = 1, NOS
+        IF( rx( i ) > side .OR. rx( i ) < 0 ) CALL ABORT
+        IF( ry( i ) > side .OR. ry( i ) < 0 ) CALL ABORT
+        IF( rz( i ) > side .OR. rz( i ) < 0 ) CALL ABORT
+     ENDDO
+
+     ! 2. velocities at time: time + deltat/2
+
+     FORALL( i = 1 : NOS )
+        vx( i ) = vx( i ) + (1./2.)*fx( i )*deltat
+        vy( i ) = vy( i ) + (1./2.)*fy( i )*deltat
+        vz( i ) = vz( i ) + (1./2.)*fz( i )*deltat
+     ENDFORALL
+
+     ! PRINT *, 'Velocities at time: ', time
+     ! DO i= 1, NOS
+     !    PRINT *, vx( i ), vy( i ), vz( i )
+     ! ENDDO
+
+     ! 3. acceleration at time: time + deltat
+
+     ! compute the force at time: time + deltat
+
+     FORALL( i = 1 : NOS )
+        fx( i ) = 0.
+        fy( i ) = 0.
+        fz( i ) = 0.
+        u( i ) = 0.
+     ENDFORALL
+
+     sumx = 0; sumy = 0; sumz = 0 ! to delete
+
+     tmp%Ptr => listH%Ptr  ! the temporary pointer is set at the beginning of the list
+
+     skim_array: DO i = 1, NOS
+        IF( ASSOCIATED( npoint( i )%Ptr ) ) THEN ! in this case the i-th particle is interacting with another one
+           ! skim the list untill next non-NULL npoint( j )%Ptr
+           ! the last particle's interactions are accounted for in the previous elements of the list so that npoint( NOS )%Ptr => NULL() always
+           skim_list: DO
+              IF( (.NOT.ASSOCIATED(tmp%Ptr) .OR. ASSOCIATED( tmp%Ptr, npoint( find_next( i, npoint ) )%Ptr ) ) )   EXIT
+              ! it means that we have reached the next group of interacting particles, and the loop must be ended; if no next element can be found then the loop is eneded when tmp%Ptr reaches NULL()
+
+              j = tmp%Ptr%data ! set the index of the second particle
+
+              r = distance( rx( i ), ry( i ), rz( i ), rx( j ), ry( j ), rz( j ) )
+              PRINT *, i, j, r, side
+
+              forcex = force( rx( i ), rx( j ), r )
+              forcey = force( ry( i ), ry( j ), r )
+              forcez = force( rz( i ), rz( j ), r )
+              ! PRINT *, i, j, r, forcex, forcey, forcez
+
+              fx( i ) = fx( i ) + force( rx( i ), rx( j ), r )
+              fy( i ) = fy( i ) + force( ry( i ), ry( j ), r )
+              fz( i ) = fz( i ) + force( rz( i ), rz( j ), r )
+              u( i ) = u( i ) + pot_energy( r )
+              ! we must also account for the tmp%Ptr%data particle which experiments an equal but opposite force
+              fx( j ) = fx( j ) - force( rx( i ), rx( j ), r )
+              fy( j ) = fy( j ) - force( ry( i ), ry( j ), r )
+              fz( j ) = fz( j ) - force( rz( i ), rz( j ), r )
+              ! u( j ) = u( j ) + pot_energy( r )
+
+              ! go to the next element in the list
+              tmp%Ptr => tmp%Ptr%nxtPtr
+           ENDDO skim_list
+        ENDIF
+        ! otherwise jump to the next particle
+     ENDDO skim_array
+
+     ! DO i = 1 , NOS
+     !    sumx = sumx + fx(i)
+     !    sumy = sumy + fy( i )
+     !    sumz = sumz + fz( i )
+     ! ENDDO
+     ! PRINT *, iter, sumx, sumy, sumz
+
+     ! 4. velocities at time: time + deltat
+     ! here the acceleration is evaluated at time:  time + deltat
+
+     FORALL( i = 1 : NOS )
+        vx( i ) = vx( i ) + (1./2.) * fx( i ) * deltat
+        vy( i ) = vy( i ) + (1./2.) * fy( i ) * deltat
+        vz( i ) = vz( i ) + (1./2.) * fz( i ) * deltat
+     ENDFORALL
+
+     ! End of VELOCITY-VERLET ALGORYTHM
+
+     ! compute the energy
+     kin = (1./2.) * ( DOT_PRODUCT( vx, vx ) + DOT_PRODUCT( vy, vy ) + DOT_PRODUCT( vz, vz ) )
+     pot = 0.
+     DO i = 1, NOS
+        IF( ABS( u( i ) ) > EPSILON( u( i ) ) ) pot = pot + u( i )
+     ENDDO
+
+     mec = kin + pot
+
+  ENDDO evolution
+
+
+  ! CALL print_list( listH%Ptr, listT%Ptr )
+
+  ! DO i= 1, NOS
+  !    IF( .NOT.ASSOCIATED( npoint(i)%Ptr) ) THEN
+  !       WRITE( *, * ) 0
+  !    ELSE
+  !       PRINT *, npoint( i )%Ptr%data
+  !    ENDIF
+  ! ENDDO
+
+
+  CLOSE( unit = 1 )
+  CLOSE( UNIT = 2 )
 ENDPROGRAM soft_spheres
 
 !****************************************************************************************************************************************************************************************************************
