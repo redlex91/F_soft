@@ -6,7 +6,7 @@ MODULE prec_def
   INTEGER, PARAMETER :: sp = KIND( 1.0 ), &
        dp = SELECTED_REAL_KIND( 2 * PRECISION( 1.0_sp ) ), &
        qp = SELECTED_REAL_KIND( 2 * PRECISION( 1.0_dp ) ), &
-       prec = SELECTED_REAL_KIND( 6, 37 ) ! this is the chosen precision which
+       prec = dp!SELECTED_REAL_KIND( 6, 37 ) ! this is the chosen precision which
   ! will be used in the program
 ENDMODULE prec_def
 
@@ -17,10 +17,10 @@ MODULE constants
   USE prec_def
   IMPLICIT NONE
   SAVE
-  INTEGER, PARAMETER :: NOS = 729, MAX_ITER = 10000 ! NOS = number of spheres,
+  INTEGER, PARAMETER :: NOS = 100, MAX_ITER = 500000, INTEG_STEP = 15000, EQ_STEP = 30000 ! NOS = number of spheres, number of iterations of the evolution step, number of steps needed for computing mean values, number of steps after which the system has reached equilibrium
   ! MAX_ITER = maximum number of iterations of the program
-  REAL( prec ), PARAMETER :: e_D = -2.98 ! energy per particle to impose
-  REAL( prec ), PARAMETER :: rho = 0.7, deltat = 0.001, r_c = 2.5, r_L = 2.80
+  REAL( prec ), PARAMETER :: e_D = -2.98_prec, T_D = 1.22_prec ! energy per particle to impose
+  REAL( prec ), PARAMETER :: rho = 0.7_prec, deltat = 0.001_prec, r_c = 2.5_prec, r_L = 2.80_prec
   ! density, time interval, core distance, effective core distance
 END MODULE constants
 
@@ -266,22 +266,25 @@ PROGRAM soft_spheres
   REAL( prec ) :: kin, pot, mec ! total kinetic, potential
   ! and mechanical energy resp.
   REAL( prec ), dimension( 1:NOS ) :: rx, ry, rz,&
+       rx0, ry0, rz0,&
        vx, vy, vz,&
        fx, fy, fz,&
        ax, ay, az,&
        u
-  REAL( prec ) :: vxc, vyc, vzc ! CoM velocities
+  REAL( prec ) :: vxc, vyc, vzc, & ! CoM velocities
+       fijx, fijy, fijz
   
   ! Variables needed for computing the temperaure
   REAL( prec ) :: kin_sum, & ! sum of the kinetic energy during the time sample
-       time_sample, & ! time sample to compute the mean kinetic energy
-       temp ! temperature
+       integ_time, & ! time sample to compute the mean kinetic energy
+       temp, temp_old, & ! temperature
+       msqdisp = 0 ! mean square displacement
   ! Variables needed for computing the pressure
   REAL( prec ) :: w, & ! 1/dim * <sum ri*Fi >
        press ! pressure / (rho*temp) - 1 = w/(NOS * temp)
 
-  INTEGER :: i, j, iter
-  INTEGER :: flag = 0, ok = 0
+  INTEGER :: i, j, iter, integ_count = 0
+  INTEGER :: flag = 0, ok = 0, msqd_first = 0 ! put ok = 1 if the temperature is enforced
 
   TYPE( ptr2node ) :: listH, listT  ! these variables contain the pointers to
   ! the head and the tail of the "list", see notes
@@ -298,6 +301,11 @@ PROGRAM soft_spheres
 
   ! these variables are temporary and sould be eliminated
 
+  CHARACTER( LEN = 70 ) :: fn
+  INTEGER, PARAMETER :: numfiles = 10
+  INTEGER, PARAMETER :: outunit = 44
+  INTEGER :: filenum
+  
   !****************************************************************************
   !****************************** END OF PREAMBLE *****************************
   !****************************************************************************
@@ -308,6 +316,11 @@ PROGRAM soft_spheres
        ACCESS = "sequential", POSITION = "rewind" )
   OPEN( UNIT = 3, FILE = "obs.dat", STATUS = "replace", &
        ACCESS = "sequential", POSITION = "rewind" )
+
+  OPEN( UNIT = 4, FILE = "speed.dat", STATUS = "replace", &
+       ACCESS = "sequential", POSITION = "rewind" )
+
+  OPEN( UNIT = 12, FILE = "msqd.dat", STATUS = "REPLACE", ACCESS = "SEQUENTIAL", POSITION = "REWIND" )
   
   ! computing some quantities neeeded throughout the program
   ! these variables MUST NOT be modified elsewhere
@@ -329,9 +342,9 @@ PROGRAM soft_spheres
   ! time is set to zero before the start of the program
   time = 0
   
-  time_sample = 0
+  integ_time = 0
   kin_sum = 0
-  temp = 0
+  temp = 0; temp_old = 0
   w = 0
   press = 0
 
@@ -407,7 +420,94 @@ PROGRAM soft_spheres
   ! STEP 2: TERMALISATION
   ! the list should be destroyed after 10 time steps of simulation
 
-  evolution: DO iter = 0, MAX_ITER
+ ! measure: DO filenum = 1, 000numfiles
+     !WRITE( fn, FMT = '(i0,a)' ) filenum, '.dat'
+  !OPEN( UNIT = outunit, file = fn, form = 'formatted' )
+
+  ! First step
+  !Build list for the first time
+  
+  build_list_zero: DO i = 1, NOS
+     flag = 0
+     DO j = i+1, NOS
+        IF( distance( rx(i), ry(i), rz(i), rx(j), ry(j), rz(j) ) < r_L )&
+             THEN
+           CALL add_node( listH%Ptr, listT%Ptr, j )
+           IF( flag == 0 ) THEN ! it means it is the first occurrence
+              npoint( i )%Ptr => listT%Ptr
+              flag = 1 
+           ENDIF
+        ENDIF
+     ENDDO
+     IF( flag == 0 ) NULLIFY( npoint( i )%Ptr ) ! in this case no
+     ! particle j>i is at distance < r_L
+  ENDDO build_list_zero
+
+  ! computing potential energy and forces at time zero
+  ! compute the force at time: time = 0
+  FORALL( i = 1 : NOS )
+     fx( i ) = 0.
+     fy( i ) = 0.
+     fz( i ) = 0.
+     u( i ) = 0.
+  ENDFORALL
+
+  tmp%Ptr => listH%Ptr  ! the temporary pointer is set at the beginning
+  ! of the list
+
+  skim_array_zero: DO i = 1, NOS
+     IF( ASSOCIATED( npoint( i )%Ptr ) ) THEN ! in this case the i-th
+        ! particle is interacting with another one
+
+        ! skim the list untill next non-NULL npoint( j )%Ptr
+        ! the last particle's interactions are accounted for in the
+        ! previous elements of the list so that npoint( NOS )%Ptr =>
+        ! NULL() always
+        skim_list_zero: DO
+           IF( (.NOT.ASSOCIATED(tmp%Ptr)) .OR. ASSOCIATED( tmp%Ptr, &
+                npoint( find_next( i, npoint ) )%Ptr ) )   EXIT
+           ! it means that we have reached the next group of interacting
+           ! particles, and the loop must be ended; if no next element
+           ! can be found then the loop is eneded when tmp%Ptr reaches
+           ! NULL()
+           j = tmp%Ptr%data ! set the index of the second particle
+           ! PRINT *, j
+           r = distance( rx( i ), ry( i ), rz( i ), rx( j ), ry( j ), &
+                rz( j ) )
+           ! PRINT *, i, j, r
+
+           fx( i ) = fx( i ) + force( rx( i ), rx( j ), r )
+           fy( i ) = fy( i ) + force( ry( i ), ry( j ), r )
+           fz( i ) = fz( i ) + force( rz( i ), rz( j ), r )
+           u( i ) = u( i ) + pot_energy( r )
+           ! we must also account for the tmp%Ptr%data particle which
+           ! experiments an equal but opposite force
+           fx( j ) = fx( j ) - force( rx( i ), rx( j ), r )
+           fy( j ) = fy( j ) - force( ry( i ), ry( j ), r )
+           fz( j ) = fz( j ) - force( rz( i ), rz( j ), r )
+           ! u( j ) = u( j ) + pot_energy( r )
+           ! go to the next element in the list
+
+           ! PRINT *, 'Forces at time:', time
+           ! DO k = 1, NOS
+           !    PRINT *, fx(k), fy(k), fz(k)
+           ! ENDDO
+
+           tmp%Ptr => tmp%Ptr%nxtPtr
+        ENDDO skim_list_zero
+     ENDIF
+     ! otherwise jump to the next particle
+  ENDDO skim_array_zero
+
+  ! compute the energy
+  kin = (1./2.) * ( DOT_PRODUCT( vx, vx ) + DOT_PRODUCT( vy, vy ) &
+       + DOT_PRODUCT( vz, vz ) )
+  pot = SUM( u( 1: NOS ) )
+  mec = kin + pot
+
+  PRINT *, kin, pot/NOS, mec, e_D
+
+  evolution: DO iter = 0, MAX_ITER 
 
      IF( MOD( iter, 100 ) == 0 ) PRINT *, "Completed:", &
           (100 * iter) / MAX_ITER, "%"
@@ -435,111 +535,143 @@ PROGRAM soft_spheres
 
      ENDIF refresh_list
 
-     time_zero: IF( time == 0 ) THEN ! compute force, potential energy,
-        ! acceleration at time = 0
+     ! time_zero: IF( time == 0 ) THEN ! compute force, potential energy,
+     !    ! acceleration at time = 0
 
-        ! compute the force at time: time = 0
-        FORALL( i = 1 : NOS )
-           fx( i ) = 0.
-           fy( i ) = 0.
-           fz( i ) = 0.
-           u( i ) = 0.
-        ENDFORALL
+     !    ! compute the force at time: time = 0
+     !    FORALL( i = 1 : NOS )
+     !       fx( i ) = 0.
+     !       fy( i ) = 0.
+     !       fz( i ) = 0.
+     !       u( i ) = 0.
+     !    ENDFORALL
 
-        tmp%Ptr => listH%Ptr  ! the temporary pointer is set at the beginning
-        ! of the list
+     !    tmp%Ptr => listH%Ptr  ! the temporary pointer is set at the beginning
+     !    ! of the list
 
-        skim_array_zero: DO i = 1, NOS
-           IF( ASSOCIATED( npoint( i )%Ptr ) ) THEN ! in this case the i-th
-              ! particle is interacting with another one
+     !    skim_array_zero: DO i = 1, NOS
+     !       IF( ASSOCIATED( npoint( i )%Ptr ) ) THEN ! in this case the i-th
+     !          ! particle is interacting with another one
               
-              ! skim the list untill next non-NULL npoint( j )%Ptr
-              ! the last particle's interactions are accounted for in the
-              ! previous elements of the list so that npoint( NOS )%Ptr =>
-              ! NULL() always
-              skim_list_zero: DO
-                 IF( (.NOT.ASSOCIATED(tmp%Ptr)) .OR. ASSOCIATED( tmp%Ptr, &
-                      npoint( find_next( i, npoint ) )%Ptr ) )   EXIT
-                 ! it means that we have reached the next group of interacting
-                 ! particles, and the loop must be ended; if no next element
-                 ! can be found then the loop is eneded when tmp%Ptr reaches
-                 ! NULL()
-                 j = tmp%Ptr%data ! set the index of the second particle
-                 ! PRINT *, j
-                 r = distance( rx( i ), ry( i ), rz( i ), rx( j ), ry( j ), &
-                      rz( j ) )
-                 ! PRINT *, i, j, r
+     !          ! skim the list untill next non-NULL npoint( j )%Ptr
+     !          ! the last particle's interactions are accounted for in the
+     !          ! previous elements of the list so that npoint( NOS )%Ptr =>
+     !          ! NULL() always
+     !          skim_list_zero: DO
+     !             IF( (.NOT.ASSOCIATED(tmp%Ptr)) .OR. ASSOCIATED( tmp%Ptr, &
+     !                  npoint( find_next( i, npoint ) )%Ptr ) )   EXIT
+     !             ! it means that we have reached the next group of interacting
+     !             ! particles, and the loop must be ended; if no next element
+     !             ! can be found then the loop is eneded when tmp%Ptr reaches
+     !             ! NULL()
+     !             j = tmp%Ptr%data ! set the index of the second particle
+     !             ! PRINT *, j
+     !             r = distance( rx( i ), ry( i ), rz( i ), rx( j ), ry( j ), &
+     !                  rz( j ) )
+     !             ! PRINT *, i, j, r
 
-                 fx( i ) = fx( i ) + force( rx( i ), rx( j ), r )
-                 fy( i ) = fy( i ) + force( ry( i ), ry( j ), r )
-                 fz( i ) = fz( i ) + force( rz( i ), rz( j ), r )
-                 u( i ) = u( i ) + pot_energy( r )
-                 ! we must also account for the tmp%Ptr%data particle which
-                 ! experiments an equal but opposite force
-                 fx( j ) = fx( j ) - force( rx( i ), rx( j ), r )
-                 fy( j ) = fy( j ) - force( ry( i ), ry( j ), r )
-                 fz( j ) = fz( j ) - force( rz( i ), rz( j ), r )
-                 ! u( j ) = u( j ) + pot_energy( r )
-                 ! go to the next element in the list
+     !             fx( i ) = fx( i ) + force( rx( i ), rx( j ), r )
+     !             fy( i ) = fy( i ) + force( ry( i ), ry( j ), r )
+     !             fz( i ) = fz( i ) + force( rz( i ), rz( j ), r )
+     !             u( i ) = u( i ) + pot_energy( r )
+     !             ! we must also account for the tmp%Ptr%data particle which
+     !             ! experiments an equal but opposite force
+     !             fx( j ) = fx( j ) - force( rx( i ), rx( j ), r )
+     !             fy( j ) = fy( j ) - force( ry( i ), ry( j ), r )
+     !             fz( j ) = fz( j ) - force( rz( i ), rz( j ), r )
+     !             ! u( j ) = u( j ) + pot_energy( r )
+     !             ! go to the next element in the list
 
-                 ! PRINT *, 'Forces at time:', time
-                 ! DO k = 1, NOS
-                 !    PRINT *, fx(k), fy(k), fz(k)
-                 ! ENDDO
+     !             ! PRINT *, 'Forces at time:', time
+     !             ! DO k = 1, NOS
+     !             !    PRINT *, fx(k), fy(k), fz(k)
+     !             ! ENDDO
 
-                 tmp%Ptr => tmp%Ptr%nxtPtr
-              ENDDO skim_list_zero
-           ENDIF
-           ! otherwise jump to the next particle
-        ENDDO skim_array_zero
+     !             tmp%Ptr => tmp%Ptr%nxtPtr
+     !          ENDDO skim_list_zero
+     !       ENDIF
+     !       ! otherwise jump to the next particle
+     !    ENDDO skim_array_zero
 
-        ! compute the energy
-        kin = (1./2.) * ( DOT_PRODUCT( vx, vx ) + DOT_PRODUCT( vy, vy ) &
-             + DOT_PRODUCT( vz, vz ) )
-        pot = SUM( u( 1: NOS ) )
-        mec = kin + pot
+     !    ! compute the energy
+     !    kin = (1./2.) * ( DOT_PRODUCT( vx, vx ) + DOT_PRODUCT( vy, vy ) &
+     !         + DOT_PRODUCT( vz, vz ) )
+     !    pot = SUM( u( 1: NOS ) )
+     !    mec = kin + pot
 
-        PRINT *, kin, pot/NOS, mec, e_D
+     !    PRINT *, kin, pot/NOS, mec, e_D
 
-     ENDIF time_zero
+     ! ENDIF time_zero
 
      ! SCALE VELOCITIES FOR A GIVEN VALUE OF ENERGY PER PARTICLE
-     ! uncomment the following if the energy per particle is fixed
+     ! uncomment the ! following if the energy per particle is fixed
      set_energy: IF( e_D - pot/NOS >= 0 .AND. ok == 0 ) THEN
         ! the system must reach a sufficient potential energy per particle
         ! before setting the total energy to the desired value
-        DO i = 1, NOS
+        FORALL( i = 1 : NOS)
            vx( i ) = vx( i ) * sqrt( ( e_D - pot/NOS ) / ( kin/NOS ) )
            vy( i ) = vy( i ) * sqrt( ( e_D - pot/NOS ) / ( kin/NOS ) )
            vz( i ) = vz( i ) * sqrt( ( e_D - pot/NOS ) / ( kin/NOS ) )
            ! PRINT *, vx(i), vy(i), vz(i)
-        ENDDO
-        PRINT *, 'Energy has been succefully set to the desired value!'
+        ENDFORALL
+        PRINT *, 'Energy has been succefully set to the desired value!', time
         ok = 1 ! switch flag for energy setting
         ! compute the energy after rescaling
         kin = (1./2.) * ( DOT_PRODUCT( vx, vx ) + DOT_PRODUCT( vy, vy ) &
              + DOT_PRODUCT( vz, vz ) )
-        pot = 0.
-        DO i = 1, NOS
-           IF( ABS( u( i ) ) > EPSILON( u( i ) ) ) THEN
-              pot = pot + u( i )
-           ENDIF
-        ENDDO
+        pot = SUM( u( 1 : NOS ) )
         mec = kin + pot
         PRINT *, kin, pot, mec, mec/NOS
      ENDIF set_energy
 
-     ! block for the computation of temperature and pressure
-     IF( ok == 1 ) THEN
+     ! block for the computation of observables
+     IF( iter >= EQ_STEP ) THEN
         kin_sum = kin_sum + kin * deltat
-        time_sample = time_sample + deltat
+        integ_time = integ_time + deltat
+        ! temp_old = temp
 
-        w = w + (1./3.) * ( DOT_PRODUCT( rx, fx ) + DOT_PRODUCT( ry, fy ) + DOT_PRODUCT( rz, fz ) ) * deltat
-        temp = kin_sum / ( 2. * time_sample * NOS )
-        w = w / time_sample
-        press = w/(NOS * temp)
+        !DO i = 1, NOS
+         !  w = w + 1./3. * ( comp( 0., rx( i ) ) * fx( i ) + comp( 0., ry( i ) ) * fy (i ) + &
+         !       comp( 0., rz( i ) ) * fz( i ) ) * deltat
+        !ENDDO
+        ! w = w + (1./3.) * ( DOT_PRODUCT( comp( rx, 0. ), fx ) + DOT_PRODUCT( comp( ry, 0. ) , fy ) + DOT_PRODUCT( comp( rz, 0 ) , fz ) ) * deltat
 
-        WRITE( UNIT = 3, FMT = '(F9.3, 2ES12.4E2 )' ) time_sample, temp, press
+        IF( msqd_first == 0 ) THEN ! store initial positions for the computation of the mean square displacement
+           FORALL( i = 1 : NOS )
+              rx0( i ) = rx( i )
+              ry0( i ) = ry( i )
+              rz0( i ) = rz( i )
+           ENDFORALL
+           msqd_first = 1
+        ENDIF
+        msqdisp = 0
+        DO i = 1, NOS
+           msqdisp = msqdisp + distance( rx( i ), ry( i ), rz( i ), rx0( i ), ry0( i ), rz0( i ) )**2 
+        ENDDO
+        msqdisp = msqdisp / NOS
+        WRITE( UNIT = 12, FMT = '(2ES12.4E2)' ) time, msqdisp
+        
+        IF( integ_count == INTEG_STEP ) THEN
+           temp = kin_sum / ( 2._prec * integ_time * NOS )
+           press = w/( 3.0_prec * NOS * temp * integ_time )
+           
+           ! SCALE VELOCITIES FOR A GIVEN VALUE OF TEMPERATURE
+           ! ! uncomment the following if the temperature is fixed
+           ! IF( iter <= EQ_STEP ) THEN
+           !    FORALL( i = 1 : NOS )
+           !       vx( i ) = vx( i ) * SQRT( T_D / temp )
+           !       vy( i ) = vy( i ) * SQRT( T_D / temp )
+           !       vz( i ) = vz( i ) * SQRT( T_D / temp )
+           !    ENDFORALL
+           ! ENDIF                
+
+           WRITE( UNIT = 3, FMT = '(2F9.3, 2ES12.4E2 )' ) time, integ_time, temp, press
+           integ_time = 0.
+           kin_sum = 0.
+           w = 0.
+           integ_count = 0
+        ENDIF
+        integ_count = integ_count + 1
         ! WRITE(*,*) time_sample, temp
      ENDIF
 
@@ -622,16 +754,33 @@ PROGRAM soft_spheres
               r = distance( rx( i ), ry( i ), rz( i ), rx( j ), ry( j ), &
                    rz( j ) )
               ! PRINT *, i, j, r, side 
+              fijx = force( rx( i ), rx( j ), r )
+              fijy = force( ry( i ), ry( j ), r )
+              fijz = force( rz( i ), rz( j ), r )
 
-              fx( i ) = fx( i ) + force( rx( i ), rx( j ), r )
-              fy( i ) = fy( i ) + force( ry( i ), ry( j ), r )
-              fz( i ) = fz( i ) + force( rz( i ), rz( j ), r )
+              fx( i ) = fx( i ) + fijx
+              fy( i ) = fy( i ) + fijy
+              fz( i ) = fz( i ) + fijz
+              IF( integ_count == INTEG_STEP ) THEN
+                 w = w &
+                      + comp( rx( i ) , rx( j ) ) * fijx &
+                      + comp( ry( i ) , ry( j ) ) * fijy &
+                      + comp( rz( i ) , rz( j ) ) * fijz
+              ENDIF
+              
+              ! fx( i ) = fx( i ) + force( rx( i ), rx( j ), r )
+              ! fy( i ) = fy( i ) + force( ry( i ), ry( j ), r )
+              ! fz( i ) = fz( i ) + force( rz( i ), rz( j ), r )
               u( i ) = u( i ) + pot_energy( r )
               ! we must also account for the tmp%Ptr%data particle which
               ! experiments an equal but opposite force
-              fx( j ) = fx( j ) - force( rx( i ), rx( j ), r )
-              fy( j ) = fy( j ) - force( ry( i ), ry( j ), r )
-              fz( j ) = fz( j ) - force( rz( i ), rz( j ), r )
+              fx( j ) = fx( j ) - fijx
+              fy( j ) = fy( j ) - fijy
+              fz( j ) = fz( j ) - fijz
+              
+              ! fx( j ) = fx( j ) - force( rx( i ), rx( j ), r )
+              ! fy( j ) = fy( j ) - force( ry( i ), ry( j ), r )
+              ! fz( j ) = fz( j ) - force( rz( i ), rz( j ), r )
               ! u( j ) = u( j ) + pot_energy( r )
               ! go to the next element in the list
               tmp%Ptr => tmp%Ptr%nxtPtr
@@ -652,30 +801,35 @@ PROGRAM soft_spheres
      ! End of VELOCITY-VERLET ALGORYTHM
 
      ! compute the energy
-     kin = (1./2.) * ( DOT_PRODUCT( vx, vx ) + DOT_PRODUCT( vy, vy ) + &
+     kin = (1._prec/2._prec) * ( DOT_PRODUCT( vx, vx ) + DOT_PRODUCT( vy, vy ) + &
           DOT_PRODUCT( vz, vz ) )
      pot = SUM( u( 1: NOS ))
      mec = kin + pot
-
+     ! IF( iter > 1000 .AND. &
+     !      ABS( temp_old - temp ) < EPSILON( temp) ) THEN
+     !    DO i = 1, NOS
+     !       WRITE( UNIT = 4, FMT = '(F7.5)' ) SQRT( vx( i )**2. +  vy( i )**2.&
+     !            + vz( i )**2. )
+     !    ENDDO
+     !    PRINT *, 'Velecities have been written!'
+     !    flag_term = 1
+     ! ENDIF
+     
   ENDDO evolution
 
   CALL kill_list( listH%Ptr, listT%Ptr )
 
-  ! CALL print_list( listH%Ptr, listT%Ptr )
 
-  ! DO i= 1, NOS
-  !    IF( .NOT.ASSOCIATED( npoint(i)%Ptr) ) THEN
-  !       WRITE( *, * ) 0
-  !    ELSE
-  !       PRINT *, npoint( i )%Ptr%data
-  !    ENDIF
-  ! ENDDO
 
+  !CLOSE( outunit )
+!ENDDO measure
 
   CLOSE( UNIT = 1 )
   CLOSE( UNIT = 2 )
   CLOSE( UNIT = 3 )
 
+  CLOSE( UNIT = 4 )
+  CLOSE( UNIT = 12 )
 ENDPROGRAM soft_spheres
 
 !******************************************************************************
